@@ -3,103 +3,116 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 # Constants
-MSC_YIELD = {
-    'Haemonetics': (1.0, 1.5),  # ×10⁶ MSCs/50mL
-    'Spectra Optia': (1.5, 2.0)  # Better yield
-}
+SEEDING_DENSITY = 5000  # cells/cm²
+MAX_CONFLUENCY = 80  # %
+HARVEST_CONFLUENCY = 80  # %
+GROWTH_RATE = 0.5  # doublings per day
 
 FLASK_TYPES = {
-    'T25': {'surface': 25, 'media': 5, 'max_cells': 0.25},  # ×10⁶ cells
-    'T75': {'surface': 75, 'media': 15, 'max_cells': 0.75},
-    'T175': {'surface': 175, 'media': 30, 'max_cells': 1.75}
+    'T25': {'surface': 25, 'media_min': 5, 'media_max': 10},
+    'T75': {'surface': 75, 'media_min': 15, 'media_max': 20},
+    'T175': {'surface': 175, 'media_min': 30, 'media_max': 40}
 }
 
 GVHD_RESPONSE = {
-    'Grade I': {'base': 70, 'dose_factor': 15},
-    'Grade II': {'base': 50, 'dose_factor': 20},
-    'Grade III-IV': {'base': 30, 'dose_factor': 25}
+    'Grade I': {'min_dose': 0.5, 'max_dose': 1.0, 'response': [60, 80]},
+    'Grade II': {'min_dose': 1.0, 'max_dose': 1.5, 'response': [50, 70]},
+    'Grade III-IV': {'min_dose': 1.5, 'max_dose': 2.0, 'response': [40, 60]}
 }
 
-PLASMA_PRIMING_RATIO = 0.05  # 5% of PBSC volume
-
-def calculate_msc_therapy(weight, dose, separator, gvhd_grade, flask_type, media_freq, plasma_priming):
+def calculate_msc_therapy(weight, desired_dose, flask_type, media_volume, media_freq):
     # Calculate total MSCs needed (×10⁶ cells)
-    total_msc = dose * weight
+    total_cells = desired_dose * weight  # ×10⁶ cells
     
-    # Standard 50mL collection volume
-    pbsc_volume = 0.05  # 50mL in liters
-    yield_low, yield_high = MSC_YIELD[separator]
+    # Calculate required PBSC volume (adjusts with dose)
+    pbsc_volume = max(0.05, 0.05 * (desired_dose / 1.0))  # Minimum 50mL, scales with dose
     
-    # Calculate flasks needed (1 passage only)
-    max_cells_per_flask = FLASK_TYPES[flask_type]['max_cells']
-    flasks = int(np.ceil(total_msc / max_cells_per_flask))
+    # Calculate flasks needed based on seeding density and growth
+    flask_area = FLASK_TYPES[flask_type]['surface']
+    initial_cells = flask_area * SEEDING_DENSITY / 1e6  # ×10⁶ cells
     
-    # Culture duration (max 14 days)
-    culture_days = min(14, flasks * media_freq)
+    # Calculate passages needed
+    passages = 0
+    remaining_cells = total_cells
+    while remaining_cells > initial_cells:
+        passages += 1
+        remaining_cells /= 5  # Assume 5-fold expansion per passage
     
-    # Plasma volume
-    plasma_volume = pbsc_volume * PLASMA_PRIMING_RATIO if plasma_priming else 0
+    # Calculate culture days
+    days_per_passage = np.log(HARVEST_CONFLUENCY/SEEDING_DENSITY) / np.log(2) / GROWTH_RATE
+    culture_days = int(np.ceil(days_per_passage * (passages + 1)))
     
-    # Media calculation
-    media_per_flask = FLASK_TYPES[flask_type]['media']
-    total_media = media_per_flask * flasks * (culture_days/media_freq)
+    # Calculate total media needed
+    media_per_change = media_volume
+    total_media = media_per_change * (culture_days // media_freq) * (passages + 1)
     
     return {
         'pbsc_volume': pbsc_volume,
-        'flasks': flasks,
-        'passages': 1,
+        'flasks': passages + 1,
+        'passages': passages,
         'culture_days': culture_days,
-        'plasma_volume': plasma_volume,
         'total_media': total_media,
-        'yield_range': (yield_low, yield_high)
+        'initial_cells': initial_cells,
+        'target_cells': total_cells
     }
 
-def plot_growth_curve(days):
+def plot_growth_curve(initial_cells, target_cells, days):
     x = np.linspace(0, days, 100)
-    y = 1 / (1 + np.exp(-0.5*(x-3)))  # Sigmoid growth using numpy only
+    plateau = min(3, days-2)  # Time to reach plateau
+    growth = initial_cells * np.exp(GROWTH_RATE * x)
+    growth[x > plateau] = growth[int(plateau/days*100)]  # Plateau effect
+    
     fig, ax = plt.subplots()
-    ax.plot(x, y, 'b-', linewidth=2)
+    ax.plot(x, growth, 'g-', linewidth=2)
+    ax.axhline(y=target_cells, color='r', linestyle='--', label='Target Dose')
     ax.set_xlabel('Culture Days')
-    ax.set_ylabel('Relative MSC Growth')
-    ax.set_title('Expected MSC Growth Curve')
+    ax.set_ylabel('MSC Count (×10⁶)')
+    ax.set_title('MSC Growth Curve to Target Dose')
+    ax.legend()
     ax.grid(True, alpha=0.3)
     return fig
 
-def plot_response_curve(grade, dose):
-    base = GVHD_RESPONSE[grade]['base']
-    factor = GVHD_RESPONSE[grade]['dose_factor']
+def plot_dose_response(grade, desired_dose):
+    grade_data = GVHD_RESPONSE[grade]
     doses = np.linspace(0.5, 2.0, 100)
-    response = base + factor*(doses-0.5)
-    response = np.clip(response, 0, 95)
+    response = np.interp(doses, 
+                       [grade_data['min_dose'], grade_data['max_dose']],
+                       grade_data['response'])
     
     fig, ax = plt.subplots()
-    ax.plot(doses, response, 'r-', linewidth=2)
-    ax.axvline(dose, color='k', linestyle='--')
+    ax.plot(doses, response, 'b-', linewidth=2)
+    ax.axvline(x=desired_dose, color='r', linestyle='--', label='Desired Dose')
     ax.set_xlabel('Dose (×10⁶ MSCs/kg)')
     ax.set_ylabel('Response Probability (%)')
-    ax.set_title(f'GVHD {grade} Response Probability')
+    ax.set_title(f'GVHD {grade} Dose-Response Curve')
+    ax.legend()
     ax.grid(True, alpha=0.3)
     return fig
 
 def main():
     st.set_page_config(page_title="MSC Therapy Calculator", layout="wide")
-    st.title("Advanced MSC Therapy Calculator for GVHD")
+    st.title("Precision MSC Therapy Calculator for GVHD")
     
     # Inputs
     with st.sidebar:
         st.header("Patient Parameters")
-        weight = st.slider("Weight (kg)", 30, 120, 70)
+        weight = st.number_input("Weight (kg)", min_value=30, max_value=120, value=70)
         gvhd_grade = st.selectbox("GVHD Grade", list(GVHD_RESPONSE.keys()))
-        dose = st.slider("Desired Dose (×10⁶ MSCs/kg)", 0.5, 2.0, 1.0, 0.1)
+        desired_dose = st.slider("Desired Dose (×10⁶ MSCs/kg)", 
+                               min_value=0.5, max_value=2.0, value=1.0, step=0.1)
         
-        st.header("Lab Parameters")
-        separator = st.selectbox("Cell Separator", list(MSC_YIELD.keys()))
+        st.header("Culture Parameters")
         flask_type = st.selectbox("Flask Type", list(FLASK_TYPES.keys()))
-        media_freq = st.slider("Media Change (days)", 1, 4, 2)
-        plasma_priming = st.checkbox("Include Plasma Priming")
+        media_volume = st.slider(f"Media Volume per {flask_type} (mL)",
+                               min_value=FLASK_TYPES[flask_type]['media_min'],
+                               max_value=FLASK_TYPES[flask_type]['media_max'],
+                               value=FLASK_TYPES[flask_type]['media_min'])
+        media_freq = st.slider("Media Change Frequency (days)", 
+                              min_value=1, max_value=4, value=2)
     
     # Calculations
-    results = calculate_msc_therapy(weight, dose, separator, gvhd_grade, flask_type, media_freq, plasma_priming)
+    results = calculate_msc_therapy(weight, desired_dose, flask_type, media_volume, media_freq)
+    recommended_dose = GVHD_RESPONSE[gvhd_grade]
     
     # Results
     st.header("Therapy Parameters")
@@ -114,37 +127,37 @@ def main():
         st.metric("Culture Duration", f"{results['culture_days']} days")
         
     with col3:
-        if plasma_priming:
-            st.metric("Plasma Volume Needed", f"{results['plasma_volume']*1000:.0f} mL")
         st.metric("Total Media Needed", f"{results['total_media']:.0f} mL")
+        st.metric("Recommended Dose Range", 
+                 f"{recommended_dose['min_dose']}-{recommended_dose['max_dose']} ×10⁶/kg")
     
     # Plots
     st.header("Biological Projections")
-    col1, col2 = st.columns(2)
     
+    col1, col2 = st.columns(2)
     with col1:
-        st.pyplot(plot_growth_curve(results['culture_days']))
+        st.pyplot(plot_growth_curve(results['initial_cells'], results['target_cells'], results['culture_days']))
     
     with col2:
-        st.pyplot(plot_response_curve(gvhd_grade, dose))
+        st.pyplot(plot_dose_response(gvhd_grade, desired_dose))
     
     # Protocol Notes
-    st.header("Clinical Protocol")
+    st.header("Optimized Protocol")
     st.markdown(f"""
     **For GVHD {gvhd_grade}:**
-    - Expected yield: {results['yield_range'][0]}–{results['yield_range'][1]} ×10⁶ MSCs/50mL
-    - Recommended media change: Every {media_freq} days
+    - Recommended dose: {recommended_dose['min_dose']}-{recommended_dose['max_dose']} ×10⁶ MSCs/kg
+    - Expected response: {recommended_dose['response'][0]}–{recommended_dose['response'][1]}%
     
-    **Culture Setup:**
-    - Flask type: {flask_type} ({FLASK_TYPES[flask_type]['media']} mL media/flask)
-    - Target confluence: 70-80% before harvest
-    - Maximum culture duration: 14 days
+    **Culture Protocol:**
+    - Seeding density: {SEEDING_DENSITY} cells/cm²
+    - Target confluency: {HARVEST_CONFLUENCY}%
+    - Media changes: Every {media_freq} days with {media_volume} mL per {flask_type}
+    - Expected expansion: {GROWTH_RATE:.1f} doublings/day
     
     **Quality Control:**
-    - Viability >90% by trypan blue
+    - Viability >90% (Trypan Blue)
     - Surface markers: CD73+/CD90+/CD105+ >95%
-    - Hematopoietic markers: CD45- <2%
-    - Sterility testing required pre-infusion
+    - Sterility testing mandatory
     """)
 
 if __name__ == "__main__":
