@@ -27,6 +27,21 @@ PASSAGE_DAYS = 7
 PLASMA_PERCENT = 0.15
 MAX_PBSC = 50  # mL
 
+# Fixed media change schedule for first passage (days 1, 4, 7, 11, 14)
+PASSAGE1_MEDIA_CHANGES = [1, 4, 7, 11, 14]  # Day numbers when media is changed
+
+def calculate_media_changes(days, media_freq, is_first_passage=False):
+    """Calculate media changes based on days and frequency"""
+    if is_first_passage:
+        # For first passage, use the fixed schedule
+        # Return the number of media changes (excluding day 0 which is initial media)
+        return len([day for day in PASSAGE1_MEDIA_CHANGES if day <= days])
+    else:
+        # For other passages, change every media_freq days
+        # Calculate how many times we'll change media during the culture period
+        changes = [i for i in range(1, days+1) if i % media_freq == 0]
+        return len(changes)
+
 def calculate_therapy(weight, dose, separator, flask_type, plasma_priming, media_freq):
     # Validate inputs
     weight = max(8.0, min(weight, 120.0))
@@ -54,7 +69,8 @@ def calculate_therapy(weight, dose, separator, flask_type, plasma_priming, media
         'input': pbsc_ml * SEPARATOR_YIELD[separator],  # Starting cell count from PBSC
         'output': initial_flasks * FLASK_TYPES[flask_type]['seeding'],
         'days': p0_days,
-        'media_changes': p0_media_changes
+        'media_changes': p0_media_changes,
+        'media_schedule': [0]  # Day 0 (initial)
     })
     
     total_days += p0_days
@@ -70,9 +86,24 @@ def calculate_therapy(weight, dose, separator, flask_type, plasma_priming, media
         )
         
         days = PASSAGE1_DAYS if passage_num == 1 else PASSAGE_DAYS
-        media_changes = (days // media_freq)  # Changes during culture period
-        if media_changes == 0:  # Ensure at least one media change
+        
+        # Calculate media changes based on our schedule
+        is_first = (passage_num == 1)
+        media_changes = calculate_media_changes(days, media_freq, is_first)
+        
+        # Ensure at least one media change
+        if media_changes == 0:
             media_changes = 1
+            
+        # Generate media change schedule
+        if is_first:
+            # First passage has fixed schedule
+            media_schedule = [day for day in PASSAGE1_MEDIA_CHANGES if day <= days]
+            media_schedule.insert(0, 0)  # Add initial media (day 0)
+        else:
+            # Other passages change every media_freq days
+            media_schedule = [0]  # Initial media
+            media_schedule.extend([i for i in range(1, days+1) if i % media_freq == 0])
         
         passages.append({
             'passage_num': passage_num,
@@ -80,11 +111,12 @@ def calculate_therapy(weight, dose, separator, flask_type, plasma_priming, media
             'input': current_flasks * FLASK_TYPES[flask_type]['seeding'],
             'output': current_flasks * FLASK_TYPES[flask_type]['confluent'],
             'days': days,
-            'media_changes': media_changes
+            'media_changes': media_changes + 1,  # +1 for initial media
+            'media_schedule': media_schedule
         })
         
         total_days += days
-        total_media += current_flasks * FLASK_TYPES[flask_type]['media'] * media_changes
+        total_media += current_flasks * FLASK_TYPES[flask_type]['media'] * (media_changes + 1)
     
     plasma_vol = passages[0]['flasks'] * FLASK_TYPES[flask_type]['media'] * PLASMA_PERCENT if plasma_priming else 0
     
@@ -121,6 +153,14 @@ def plot_growth(passages, target_cells):
         ax.annotate(f"P{passage['passage_num']}", 
                    (day_point, passage['output']/1e6),
                    xytext=(5, 5), textcoords='offset points')
+    
+    # Add media change markers
+    cumulative_days = 0
+    for passage in passages:
+        for change_day in passage['media_schedule'][1:]:  # Skip initial media (day 0)
+            media_day = cumulative_days + change_day
+            ax.axvline(media_day, color='gray', linestyle=':', alpha=0.5)
+        cumulative_days += passage['days']
     
     ax.set_xlabel('Culture Days', fontsize=12)
     ax.set_ylabel('Cells (×10⁶)', fontsize=12)
@@ -170,7 +210,9 @@ def main():
         separator = st.selectbox("Cell Separator", list(SEPARATOR_YIELD.keys()))
         flask_type = st.selectbox("Flask Type", list(FLASK_TYPES.keys()))
         plasma_priming = st.checkbox("Plasma Priming (15% of initial media)")
-        media_freq = st.slider("Media Change Frequency (days)", 1, 7, 2)
+        media_freq = st.slider("Media Change Frequency (days)", 1, 7, 2, help="For passages after first. First passage uses fixed schedule.")
+        
+        st.info("First passage media changes on days 1, 4, 7, 11, and 14")
     
     results = calculate_therapy(weight, dose, separator, flask_type, plasma_priming, media_freq)
     
@@ -188,6 +230,7 @@ def main():
     st.subheader("Passage Details")
     passage_data = []
     for p in results['passages']:
+        media_days = ", ".join([f"Day {d}" for d in p['media_schedule']])
         passage_data.append({
             "Passage": p['passage_num'],
             "Flasks": p['flasks'],
@@ -195,6 +238,7 @@ def main():
             "Output Cells": f"{p['output']/1e6:.1f}×10⁶",
             "Days": p['days'],
             "Media Changes": p['media_changes'],
+            "Media Schedule": media_days,
             "Media Volume": f"{p['flasks'] * FLASK_TYPES[flask_type]['media'] * p['media_changes']} mL"
         })
     st.table(passage_data)
