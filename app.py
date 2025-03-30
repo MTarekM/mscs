@@ -22,12 +22,12 @@ GVHD_RESPONSE = {
 
 def calculate_msc_therapy(weight, desired_dose, flask_type, media_volume, media_freq):
     # Calculate total MSCs needed (×10⁶ cells)
-    total_cells = desired_dose * weight  # ×10⁶ cells
+    total_cells = desired_dose * weight
     
-    # Calculate required PBSC volume (adjusts with dose)
-    pbsc_volume = max(0.05, 0.05 * (desired_dose / 1.0))  # Minimum 50mL, scales with dose
+    # Calculate required PBSC volume (minimum 50mL, scales with dose)
+    pbsc_volume = max(0.05, 0.05 * (desired_dose / 1.0))
     
-    # Calculate flasks needed based on seeding density and growth
+    # Calculate flasks needed
     flask_area = FLASK_TYPES[flask_type]['surface']
     initial_cells = flask_area * SEEDING_DENSITY / 1e6  # ×10⁶ cells
     
@@ -36,10 +36,10 @@ def calculate_msc_therapy(weight, desired_dose, flask_type, media_volume, media_
     remaining_cells = total_cells
     while remaining_cells > initial_cells:
         passages += 1
-        remaining_cells /= 5  # Assume 5-fold expansion per passage
+        remaining_cells /= 5  # 5-fold expansion per passage
     
-    # Calculate culture days
-    days_per_passage = np.log(HARVEST_CONFLUENCY/SEEDING_DENSITY) / np.log(2) / GROWTH_RATE
+    # Calculate culture days (minimum 3 days)
+    days_per_passage = max(3, np.log(HARVEST_CONFLUENCY/SEEDING_DENSITY) / np.log(2) / GROWTH_RATE)
     culture_days = int(np.ceil(days_per_passage * (passages + 1)))
     
     # Calculate total media needed
@@ -58,9 +58,18 @@ def calculate_msc_therapy(weight, desired_dose, flask_type, media_volume, media_
 
 def plot_growth_curve(initial_cells, target_cells, days):
     x = np.linspace(0, days, 100)
-    plateau = min(3, days-2)  # Time to reach plateau
+    
+    # Ensure we have enough time points
+    if days <= 0:
+        days = 1  # Minimum 1 day
+    
+    # Calculate growth curve
     growth = initial_cells * np.exp(GROWTH_RATE * x)
-    growth[x > plateau] = growth[int(plateau/days*100)]  # Plateau effect
+    
+    # Apply plateau when reaching target
+    plateau_idx = np.argmax(growth >= target_cells)
+    if plateau_idx > 0:  # If we reach target
+        growth[plateau_idx:] = target_cells
     
     fig, ax = plt.subplots()
     ax.plot(x, growth, 'g-', linewidth=2)
@@ -74,10 +83,10 @@ def plot_growth_curve(initial_cells, target_cells, days):
 
 def plot_dose_response(grade, desired_dose):
     grade_data = GVHD_RESPONSE[grade]
-    doses = np.linspace(0.5, 2.0, 100)
+    doses = np.linspace(grade_data['min_dose'], grade_data['max_dose'], 100)
     response = np.interp(doses, 
-                       [grade_data['min_dose'], grade_data['max_dose']],
-                       grade_data['response'])
+                        [grade_data['min_dose'], grade_data['max_dose']],
+                        grade_data['response'])
     
     fig, ax = plt.subplots()
     ax.plot(doses, response, 'b-', linewidth=2)
@@ -149,10 +158,10 @@ def main():
     - Expected response: {recommended_dose['response'][0]}–{recommended_dose['response'][1]}%
     
     **Culture Protocol:**
-    - Seeding density: {SEEDING_DENSITY} cells/cm²
+    - Seeding density: {SEEDING_DENSITY:,} cells/cm²
     - Target confluency: {HARVEST_CONFLUENCY}%
     - Media changes: Every {media_freq} days with {media_volume} mL per {flask_type}
-    - Expected expansion: {GROWTH_RATE:.1f} doublings/day
+    - Expected expansion rate: {GROWTH_RATE:.1f} doublings/day
     
     **Quality Control:**
     - Viability >90% (Trypan Blue)
