@@ -3,10 +3,10 @@ import matplotlib.pyplot as plt
 import numpy as np
 import math
 
-# Constants
+# Constants from reference tables
 FLASK_TYPES = {
     'T-25': {'seeding': 0.7e6, 'confluent': 2.8e6, 'media': 5},
-    'T-75': {'seeding': 2.1e6, 'confluent': 8.4e6, 'media': 15}, 
+    'T-75': {'seeding': 2.1e6, 'confluent': 8.4e6, 'media': 15},
     'T-160': {'seeding': 4.6e6, 'confluent': 18.4e6, 'media': 30}
 }
 
@@ -18,11 +18,12 @@ GVHD_RESPONSE = {
 
 SEPARATOR_YIELD = {'Haemonetics': 1e6, 'Spectra Optia': 2e6}
 
+# Protocol constants
 SAFETY_FACTOR = 1.2
 MAX_PASSAGES = 3
-PASSAGE1_DAYS = 14  # Days for first passage
-PASSAGE_DAYS = 7    # Days for subsequent passages
-MEDIA_CHANGE_FREQ = 2  # Change media every 2 days
+PASSAGE1_DAYS = 14
+PASSAGE_DAYS = 7
+MEDIA_CHANGE_FREQ = 2  # days between media changes
 PLASMA_PERCENT = 0.15
 MAX_PBSC = 50  # mL
 
@@ -31,22 +32,22 @@ def calculate_therapy(weight, dose, separator, flask_type, plasma_priming):
     weight = max(8.0, min(weight, 120.0))
     dose = max(0.5, min(dose, 2.0))
     
-    # PBSC calculation
+    # Calculate target cells and PBSC volume
     target_cells = dose * weight * 1e6
     pbsc_ml = min(target_cells / SEPARATOR_YIELD[separator], MAX_PBSC)
     
-    # Passage calculations
+    # Initialize passage tracking
     passages = []
-    current_flasks = math.ceil(target_cells / FLASK_TYPES[flask_type]['confluent'])
     total_days = 0
     total_media = 0
     
     # Initial seeding (Passage 0)
+    initial_flasks = math.ceil(target_cells / FLASK_TYPES[flask_type]['confluent'])
     passages.append({
         'passage_num': 0,
-        'flasks': current_flasks,
-        'input': current_flasks * FLASK_TYPES[flask_type]['seeding'],
-        'output': current_flasks * FLASK_TYPES[flask_type]['confluent'],
+        'flasks': initial_flasks,
+        'input': initial_flasks * FLASK_TYPES[flask_type]['seeding'],
+        'output': initial_flasks * FLASK_TYPES[flask_type]['confluent'],
         'days': 0,
         'media_changes': 0
     })
@@ -56,14 +57,14 @@ def calculate_therapy(weight, dose, separator, flask_type, plasma_priming):
         if passages[-1]['output'] >= target_cells:
             break
             
-        # Calculate required flasks
+        # Calculate required flasks with safety factor
         current_flasks = math.ceil(
             (passages[-1]['output'] / FLASK_TYPES[flask_type]['seeding']) * SAFETY_FACTOR
         )
         
         # Calculate passage duration and media changes
         days = PASSAGE1_DAYS if passage_num == 1 else PASSAGE_DAYS
-        media_changes = (days // MEDIA_CHANGE_FREQ) + 1  # Include initial media
+        media_changes = (days // MEDIA_CHANGE_FREQ) + 1  # +1 for initial media
         
         passages.append({
             'passage_num': passage_num,
@@ -91,7 +92,7 @@ def calculate_therapy(weight, dose, separator, flask_type, plasma_priming):
     }
 
 def plot_growth(passages, target_cells):
-    fig, ax = plt.subplots(figsize=(10,6))
+    fig, ax = plt.subplots(figsize=(10, 6))
     
     # Build timeline
     days = [0]
@@ -108,13 +109,14 @@ def plot_growth(passages, target_cells):
         days.append(cumulative_days)
         cells.append(passage['output'])
     
-    # Plot in millions
+    # Plot formatting
     ax.plot(days, [x/1e6 for x in cells], 'go-', markersize=8, linewidth=2)
     ax.axhline(target_cells/1e6, color='r', linestyle='--', 
               label=f'Target: {target_cells/1e6:.1f}×10⁶')
     
     ax.set_xlabel('Culture Days', fontsize=12)
     ax.set_ylabel('Cells (×10⁶)', fontsize=12)
+    ax.set_title('MSC Expansion Timeline', fontsize=14)
     ax.legend()
     ax.grid(True, alpha=0.3)
     ax.set_xlim(0, cumulative_days * 1.05)
@@ -128,12 +130,13 @@ def plot_remission_probability(grade, dose):
     opt = (data['min_dose'] + data['max_dose'])/2
     y = data['response'][0] + (data['response'][1] - data['response'][0]) * np.exp(-((x - opt)/0.3)**2)
     
-    fig, ax = plt.subplots(figsize=(10,6))
-    ax.plot(x, y, 'b-', linewidth=2)
-    ax.axvline(dose, color='r', linestyle='--')
+    fig, ax = plt.subplots(figsize=(10, 6))
+    ax.plot(x, y, 'b-', linewidth=2, label='Remission Probability')
+    ax.axvline(dose, color='r', linestyle='--', label=f'Selected Dose: {dose}×10⁶/kg')
     ax.set_ylim(0, 100)
     ax.set_xlabel('Dose (×10⁶ cells/kg)', fontsize=12)
-    ax.set_ylabel('Remission Probability (%)', fontsize=12)
+    ax.set_ylabel('Probability (%)', fontsize=12)
+    ax.legend()
     ax.grid(True, alpha=0.3)
     
     return fig
@@ -187,7 +190,7 @@ def main():
     
     **Culture Parameters:**
     - Flask: {flask_type}
-    - Seeding density: {FLASK_TYPES[flask_type]['seeding']/1e6:.1f}×10⁶ cells/flask
+    - Seeding: {FLASK_TYPES[flask_type]['seeding']/1e6:.1f}×10⁶ cells/flask
     - Confluent yield: {FLASK_TYPES[flask_type]['confluent']/1e6:.1f}×10⁶ cells/flask
     - Media changes: Every {MEDIA_CHANGE_FREQ} days
     
