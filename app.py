@@ -36,7 +36,7 @@ def calculate_msc_parameters(weight, dose, separator, gvhd_grade, plasma_priming
     flasks = int(np.ceil(pbsc_volume_high / (FLASK_CAPACITY/1000)))  # Convert flask capacity to liters
     
     # Calculate culture duration and passages
-    passages = max(1, int(np.ceil(np.log(total_msc/1e6)/np.log(PASSAGE_EXPANSION)))
+    passages = max(1, int(np.ceil(np.log(total_msc/1e6)/np.log(PASSAGE_EXPANSION))))
     culture_days = min(passages * MEDIA_CHANGE_FREQ * 2, MAX_CULTURE_DAYS)
     
     # Plasma priming calculation
