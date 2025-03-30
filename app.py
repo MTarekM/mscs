@@ -122,8 +122,8 @@ def calculate_msc_therapy(weight, desired_dose, separator, flask_type, plasma_pr
     if not found:
         # If even 200 flasks aren't enough, use maximum possible
         initial_flasks = 200
-        flasks_p2 = math.ceil((initial_flasks * flask_data['max_cells'] / initial_cells_per_flask) * SAFETY_FACTOR
-        flasks_p3 = math.ceil((flasks_p2 * flask_data['max_cells'] / initial_cells_per_flask) * SAFETY_FACTOR
+        flasks_p2 = math.ceil((initial_flasks * flask_data['max_cells'] / initial_cells_per_flask) * SAFETY_FACTOR)
+        flasks_p3 = math.ceil((flasks_p2 * flask_data['max_cells'] / initial_cells_per_flask) * SAFETY_FACTOR)
         passage3_yield = flasks_p3 * flask_data['max_cells']
 
     # Calculate total culture duration
