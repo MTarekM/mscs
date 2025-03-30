@@ -29,33 +29,50 @@ FLASK_TYPES = {
 }
 
 def calculate_msc_therapy(weight, desired_dose, separator, flask_type, media_freq):
+    # Validate inputs
+    weight = max(30, weight)
+    desired_dose = max(0.5, min(desired_dose, 2.0))
+    media_freq = max(1, media_freq)
+    
     # Calculate total cells needed (×10⁶)
     total_cells = desired_dose * weight  # in million cells
     
-    # Calculate PBSC volume needed (mL)
-    pbsc_ml = (total_cells * 1e6) / SEPARATOR_YIELD[separator]  # cells ÷ cells/mL
+    # Calculate PBSC volume needed (mL) with validation
+    try:
+        pbsc_ml = (total_cells * 1e6) / SEPARATOR_YIELD[separator]
+    except ZeroDivisionError:
+        pbsc_ml = 0
     pbsc_ml = max(50, pbsc_ml)  # Minimum 50mL
     
     # Calculate initial cells per flask
     flask_data = FLASK_TYPES[flask_type]
     initial_cells = (flask_data['surface'] * SEEDING_DENSITY) / 1e6  # million cells
     
-    # Calculate required passages
+    # Calculate required passages safely
     passages = 0
     current_cells = initial_cells
     while current_cells < total_cells:
         passages += 1
         current_cells *= 5  # 5-fold expansion per passage
+        if passages > 10:  # Safety break
+            break
     
-    # Calculate culture duration
-    days_per_passage = np.log(TARGET_CONFLUENCY/SEEDING_DENSITY*100) / np.log(2) / GROWTH_RATE
+    # Calculate culture duration with validation
+    try:
+        days_per_passage = np.log((TARGET_CONFLUENCY/100 * SEEDING_DENSITY)/SEEDING_DENSITY) / np.log(2) / GROWTH_RATE
+    except:
+        days_per_passage = MIN_CULTURE_DAYS
     total_days = max(MIN_CULTURE_DAYS, int(np.ceil(days_per_passage * passages)))
     
-    # Calculate flasks needed
-    flasks = int(np.ceil(total_cells / (flask_data['max_cells'] / 1e6)))  # million cells
+    # Calculate flasks needed with validation
+    try:
+        flasks = int(np.ceil(total_cells / (flask_data['max_cells'] / 1e6))
+    except ZeroDivisionError:
+        flasks = 0
+    flasks = max(1, flasks)
     
-    # Calculate media needed
-    media_changes = total_days // media_freq
+    # Calculate media needed safely
+    media_changes = max(1, total_days // media_freq)
     total_media = flask_data['media'] * flasks * media_changes
     
     return {
@@ -69,14 +86,19 @@ def calculate_msc_therapy(weight, desired_dose, separator, flask_type, media_fre
     }
 
 def plot_growth_curve(initial, target, days):
+    # Validate inputs
+    days = max(1, days)
+    initial = max(0.1, initial)
+    target = max(initial, target)
+    
     x = np.linspace(0, days, 100)
     growth = initial * np.exp(GROWTH_RATE * x)
     
-    # Find plateau point safely
+    # Safe plateau detection
     reached = np.where(growth >= target)[0]
-    if reached.size > 0:
-        plateau_day = x[reached[0]]
-        growth[reached[0]:] = target
+    if reached.size > 0 and reached[0] < len(growth):
+        plateau_idx = reached[0]
+        growth[plateau_idx:] = target
     
     fig, ax = plt.subplots()
     ax.plot(x, growth, 'g-', label='MSC Growth')
