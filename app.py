@@ -7,23 +7,62 @@ SEEDING_DENSITY = 5000  # cells/cm²
 GROWTH_RATE = 0.5  # doublings per day
 MIN_CULTURE_DAYS = 3  # Minimum days per passage
 
-def plot_growth_curve(initial_cells, target_cells, days):
-    # Ensure we have valid time points
-    days = max(1, days)  # Minimum 1 day
-    x = np.linspace(0, days, 100)
+# Define GVHD response parameters FIRST
+GVHD_RESPONSE = {
+    'Grade I': {'min_dose': 0.5, 'max_dose': 1.0, 'response': [60, 80]},
+    'Grade II': {'min_dose': 1.0, 'max_dose': 1.5, 'response': [50, 70]},
+    'Grade III-IV': {'min_dose': 1.5, 'max_dose': 2.0, 'response': [40, 60]}
+}
+
+FLASK_TYPES = {
+    'T25': {'surface': 25, 'media_min': 5, 'media_max': 10},
+    'T75': {'surface': 75, 'media_min': 15, 'media_max': 20},
+    'T175': {'surface': 175, 'media_min': 30, 'media_max': 40}
+}
+
+def calculate_msc_therapy(weight, desired_dose, flask_type, media_volume, media_freq):
+    # Calculate total MSCs needed (×10⁶ cells)
+    total_cells = desired_dose * weight
     
-    # Calculate exponential growth
+    # Calculate required PBSC volume (minimum 50mL, scales with dose)
+    pbsc_volume = max(0.05, 0.05 * (desired_dose / 1.0))
+    
+    # Calculate flasks needed
+    flask_area = FLASK_TYPES[flask_type]['surface']
+    initial_cells = flask_area * SEEDING_DENSITY / 1e6  # ×10⁶ cells
+    
+    # Calculate passages needed
+    passages = max(0, int(np.ceil(np.log(total_cells/initial_cells) / np.log(5))))
+    
+    # Calculate culture days (minimum 3 days per passage)
+    culture_days = max(MIN_CULTURE_DAYS, int(np.ceil(MIN_CULTURE_DAYS * (passages + 1))))
+    
+    # Calculate total media needed
+    total_media = media_volume * (culture_days // media_freq) * (passages + 1)
+    
+    return {
+        'pbsc_volume': pbsc_volume,
+        'flasks': passages + 1,
+        'passages': passages,
+        'culture_days': culture_days,
+        'total_media': total_media,
+        'initial_cells': initial_cells,
+        'target_cells': total_cells
+    }
+
+def plot_growth_curve(initial_cells, target_cells, days):
+    # Ensure valid parameters
+    days = max(1, days)
+    initial_cells = max(0.1, initial_cells)  # Minimum 0.1×10⁶ cells
+    target_cells = max(initial_cells, target_cells)
+    
+    x = np.linspace(0, days, 100)
     growth = initial_cells * np.exp(GROWTH_RATE * x)
     
-    # Find when we reach the target (if we do)
+    # Apply plateau safely
     reached_target = np.where(growth >= target_cells)[0]
-    
-    # Apply plateau if target is reached
-    if len(reached_target) > 0:
-        plateau_idx = reached_target[0]
-        # Ensure we don't exceed array bounds
-        if plateau_idx < len(growth):
-            growth[plateau_idx:] = target_cells
+    if len(reached_target) > 0 and reached_target[0] < len(growth):
+        growth[reached_target[0]:] = target_cells
     
     fig, ax = plt.subplots()
     ax.plot(x, growth, 'g-', linewidth=2)
@@ -56,11 +95,11 @@ def main():
     st.set_page_config(page_title="MSC Therapy Calculator", layout="wide")
     st.title("Precision MSC Therapy Calculator for GVHD")
     
-    # Inputs
+    # Inputs - GVHD_RESPONSE is now properly defined before this call
     with st.sidebar:
         st.header("Patient Parameters")
         weight = st.number_input("Weight (kg)", min_value=30, max_value=120, value=70)
-        gvhd_grade = st.selectbox("GVHD Grade", list(GVHD_RESPONSE.keys()))
+        gvhd_grade = st.selectbox("GVHD Grade", list(GVHD_RESPONSE.keys()))  # Now safe
         desired_dose = st.slider("Desired Dose (×10⁶ MSCs/kg)", 
                                min_value=0.5, max_value=2.0, value=1.0, step=0.1)
         
@@ -96,11 +135,9 @@ def main():
     
     # Plots
     st.header("Biological Projections")
-    
     col1, col2 = st.columns(2)
     with col1:
         st.pyplot(plot_growth_curve(results['initial_cells'], results['target_cells'], results['culture_days']))
-    
     with col2:
         st.pyplot(plot_dose_response(gvhd_grade, desired_dose))
     
@@ -113,14 +150,8 @@ def main():
     
     **Culture Protocol:**
     - Seeding density: {SEEDING_DENSITY:,} cells/cm²
-    - Target confluency: {HARVEST_CONFLUENCY}%
     - Media changes: Every {media_freq} days with {media_volume} mL per {flask_type}
     - Expected expansion rate: {GROWTH_RATE:.1f} doublings/day
-    
-    **Quality Control:**
-    - Viability >90% (Trypan Blue)
-    - Surface markers: CD73+/CD90+/CD105+ >95%
-    - Sterility testing mandatory
     """)
 
 if __name__ == "__main__":
