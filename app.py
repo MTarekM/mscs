@@ -1,12 +1,13 @@
 import streamlit as st
 import matplotlib.pyplot as plt
 import numpy as np
+import math
 
 # Constants with validation
-SEEDING_DENSITY = 5000  # cells/cm²
+SEEDING_DENSITY = 5000  # cells/cm² (applied per flask)
 GROWTH_RATE = 0.5  # doublings per day
 MIN_CULTURE_DAYS = 3  # Minimum days per passage
-TARGET_CONFLUENCY = 80  # %
+TARGET_CONFLUENCY = 80  # % (no longer used directly for time)
 
 # Clinical parameters with fallbacks
 GVHD_RESPONSE = {
@@ -24,6 +25,7 @@ SEPARATOR_YIELD = {
 }
 
 # Flask parameters with validation
+# Note: max_cells is expressed in absolute numbers.
 FLASK_TYPES = {
     'T25': {'surface': 25, 'media': 5, 'max_cells': 2.5e5},
     'T75': {'surface': 75, 'media': 15, 'max_cells': 2.0e6},
@@ -36,50 +38,54 @@ def safe_get(dictionary, key, default_key='Default'):
     return dictionary.get(key, dictionary.get(default_key))
 
 def calculate_msc_therapy(weight, desired_dose, separator, flask_type, media_freq):
-    # Validate all inputs
-    weight = max(30, min(weight, 120))
-    desired_dose = max(0.5, min(desired_dose, 2.0))
-    media_freq = max(1, min(media_freq, 4))
+    # Validate inputs
+    weight = max(30, min(weight, 120))              # in kg
+    desired_dose = max(0.5, min(desired_dose, 2.0))   # in ×10⁶/kg
+    media_freq = max(1, min(media_freq, 4))           # days between media changes
     
     # Get parameters with fallbacks
     sep_yield = safe_get(SEPARATOR_YIELD, separator)
     flask_data = safe_get(FLASK_TYPES, flask_type)
     
-    # Calculate total cells needed (×10⁶)
-    total_cells = desired_dose * weight
+    # Total cell dose needed (absolute number of cells)
+    total_cells = desired_dose * weight * 1e6  # Convert from ×10⁶ to cells
     
     # Calculate PBSC volume (mL)
     try:
-        pbsc_ml = (total_cells * 1e6) / sep_yield
-    except:
-        pbsc_ml = 50  # Fallback to 50mL
+        pbsc_ml = total_cells / sep_yield
+    except Exception:
+        pbsc_ml = 50  # Fallback to 50 mL if any issue
     pbsc_ml = max(50, pbsc_ml)
     
-    # Calculate initial cells per flask (×10⁶)
-    initial_cells = (flask_data['surface'] * SEEDING_DENSITY) / 1e6
+    # Determine initial cells in one flask (in cells)
+    initial_cells = flask_data['surface'] * SEEDING_DENSITY  # cells seeded in a flask
     
-    # Calculate passages needed safely
-    passages = 0
-    current_cells = initial_cells
-    while current_cells < total_cells and passages <= 10:  # Max 10 passages
-        passages += 1
-        current_cells *= 5  # 5-fold expansion
+    # Calculate the maximum expansion factor per passage given the flask's capacity
+    expansion_factor = flask_data['max_cells'] / initial_cells
+    # Ensure expansion_factor is at least a minimal expansion (>1)
+    expansion_factor = max(1.1, expansion_factor)
     
-    # Calculate culture duration safely
-    try:
-        days_per_passage = np.log((TARGET_CONFLUENCY/100)) / np.log(2) / GROWTH_RATE
-    except:
-        days_per_passage = MIN_CULTURE_DAYS
-    total_days = max(MIN_CULTURE_DAYS, int(np.ceil(days_per_passage * passages)))
+    # Calculate number of passages needed using logarithms (round up)
+    if initial_cells <= 0:
+        passages = 0
+    else:
+        passages = math.ceil(np.log(total_cells / initial_cells) / np.log(expansion_factor))
+        passages = max(1, passages)
     
-    # Calculate flasks needed safely
-    try:
-        flasks = int(np.ceil(total_cells / (flask_data['max_cells'] / 1e6)))
-    except:
-        flasks = 1
+    # Calculate days per passage from the expansion factor
+    # Number of doublings required: log2(expansion_factor)
+    doublings_needed = np.log(expansion_factor) / np.log(2)
+    days_per_passage = max(MIN_CULTURE_DAYS, doublings_needed / GROWTH_RATE)
+    
+    # Total culture duration is passages times days per passage
+    total_days = int(np.ceil(passages * days_per_passage))
+    
+    # Calculate number of flasks needed in the final expansion round
+    flasks = math.ceil(total_cells / flask_data['max_cells'])
     flasks = max(1, flasks)
     
-    # Calculate total media needed
+    # Calculate total media required:
+    # Determine the number of media changes (at least one) over the culture period.
     media_changes = max(1, total_days // media_freq)
     total_media = flask_data['media'] * flasks * media_changes
     
@@ -90,7 +96,9 @@ def calculate_msc_therapy(weight, desired_dose, separator, flask_type, media_fre
         'total_days': total_days,
         'total_media': total_media,
         'initial_cells': initial_cells,
-        'target_cells': total_cells
+        'target_cells': total_cells,
+        'expansion_factor': expansion_factor,
+        'days_per_passage': days_per_passage
     }
 
 def plot_growth_curve(initial, target, days):
@@ -100,23 +108,24 @@ def plot_growth_curve(initial, target, days):
     days = max(1, days)
     
     x = np.linspace(0, days, 100)
-    growth = initial * np.exp(GROWTH_RATE * x)
+    # Simulate exponential growth: initial cells * 2^(doublings)
+    # Here we assume a constant doubling rate given by GROWTH_RATE.
+    growth = initial * np.power(2, GROWTH_RATE * x)
     
-    # Safe plateau detection
-    with np.errstate(all='ignore'):  # Ignore numpy warnings
+    # Limit growth to the target (simulate plateau)
+    with np.errstate(all='ignore'):
         reached = np.where(growth >= target)[0]
-        if reached.size > 0 and reached[0] < len(growth):
+        if reached.size > 0:
             growth[reached[0]:] = target
     
     fig, ax = plt.subplots()
     ax.plot(x, growth, 'g-', label='MSC Growth')
     ax.axhline(target, color='r', linestyle='--', label='Target')
     ax.set_xlabel('Culture Days')
-    ax.set_ylabel('Cells (×10⁶)')
+    ax.set_ylabel('Cells (absolute count)')
     ax.legend()
     ax.grid(True)
     return fig
-
 
 def main():
     st.set_page_config(page_title="MSC Therapy Calculator", layout="wide")
@@ -131,7 +140,7 @@ def main():
         st.header("Lab Parameters")
         separator = st.selectbox("Cell Separator", list(SEPARATOR_YIELD.keys()))
         flask_type = st.selectbox("Flask Type", list(FLASK_TYPES.keys()))
-        media_freq = st.slider("Media Change (days)", 1, 4, 2)
+        media_freq = st.slider("Media Change Frequency (days)", 1, 4, 2)
     
     # Get grade data with fallback
     grade_data = safe_get(GVHD_RESPONSE, gvhd_grade)
@@ -151,15 +160,18 @@ def main():
     with col3:
         st.metric("Total Media", f"{results['total_media']:.0f} mL")
         st.metric("Recommended Dose", 
-                f"{grade_data['min_dose']}-{grade_data['max_dose']} ×10⁶/kg")
+                  f"{grade_data['min_dose']}-{grade_data['max_dose']} ×10⁶/kg")
     
     # Growth curve plot
     st.header("Growth Projection")
     try:
-        st.pyplot(plot_growth_curve(results['initial_cells'], 
-                                  results['target_cells'], 
-                                  results['total_days']))
-    except:
+        # Use the initial seeding from one flask and target as the final cell count per flask
+        # (for plotting we use the expansion in one flask)
+        plot_fig = plot_growth_curve(results['initial_cells'], 
+                                  results['initial_cells'] * results['expansion_factor'],
+                                  results['days_per_passage'])
+        st.pyplot(plot_fig)
+    except Exception as e:
         st.warning("Could not generate growth curve with current parameters")
     
     # Protocol notes
@@ -170,10 +182,12 @@ def main():
     - Expected response: {grade_data['response'][0]}–{grade_data['response'][1]}%
     
     **Culture Protocol:**
-    - Seeding density: {SEEDING_DENSITY:,} cells/cm²
-    - Target confluency: {TARGET_CONFLUENCY}%
-    - Media changes: Every {media_freq} days
-    - Expected expansion rate: {GROWTH_RATE:.1f} doublings/day
+    - Seeding density: {SEEDING_DENSITY:,} cells/cm² (applied per flask)
+    - Flask type: {flask_type} with surface area {safe_get(FLASK_TYPES, flask_type)['surface']} cm²
+    - Max capacity per flask: {safe_get(FLASK_TYPES, flask_type)['max_cells']:,} cells
+    - Media changes every {media_freq} days
+    - Estimated expansion per passage: {results['expansion_factor']:.2f}-fold in ~{results['days_per_passage']:.1f} days
+    - Total passages: {results['passages']} and culture duration: {results['total_days']} days
     
     **Quality Control:**
     - Viability >90% (Trypan Blue)
