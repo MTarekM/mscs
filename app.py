@@ -110,21 +110,36 @@ def main():
     # Protocol Notes
     st.header("Protocol Considerations")
     st.markdown("""
-    - **Cell Separation:** 
-      - Spectra Optia recommended for better MSC yield
-      - Process within 6 hours of collection
-    - **Culture Conditions:**
-      - Maintain 37°C with 5% CO₂
-      - Media change every 2 days
-      - Monitor confluence daily
-    - **Quality Control:**
-      - CD73+/CD90+/CD105+ > 95%
-      - CD45- < 2%
-      - Sterility testing required
+    **Cell Separation:**
+    - Spectra Optia recommended for better MSC yield (1.5-2.5×10⁶ MSCs/L)
+    - Haemonetics yields 0.8-1.2×10⁶ MSCs/L due to higher RBC contamination
+    - Process within 6 hours of collection
+
+    **Culture Conditions:**
+    - Maintain at 37°C with 5% CO₂
+    - Media change every 2 days (maximum 4 days)
+    - Monitor confluence daily
+    - Typical expansion: 5-fold per passage
+
+    **Quality Control:**
+    - Surface markers: CD73+/CD90+/CD105+ > 95%
+    - Hematopoietic exclusion: CD45- < 2%
+    - Sterility testing required before infusion
+    - Minimum viability: >90% by trypan blue
+
+    **Clinical Considerations:**
+    - Grade I: Start with lower dose (0.5-1.0×10⁶/kg)
+    - Grade III-IV: May require higher doses (1.5-2.0×10⁶/kg)
+    - Consider plasma priming for enhanced efficacy
     """)
     
     # References
-    st.caption("References: Frontiers in Immunology 2021; Stem Cell Research & Therapy 2020; Blood 2005")
+    st.header("References")
+    st.markdown("""
+    1. [Frontiers in Immunology (2021)](https://www.frontiersin.org/articles/10.3389/fimmu.2021.761616)
+    2. [Stem Cell Research & Therapy (2020)](https://stemcellres.biomedcentral.com/articles/10.1186/s13287-020-01659-x)
+    3. [Blood (2005)](https://ashpublications.org/blood/article/105/4/1815/20380/Human-mesenchymal-stem-cells-modulate-allogeneic)
+    """)
 
 if __name__ == "__main__":
     main()
