@@ -1,144 +1,152 @@
 import streamlit as st
 import matplotlib.pyplot as plt
 import numpy as np
+from scipy.stats import norm
 
-# Constants from literature
+# Constants
 MSC_YIELD = {
-    'Haemonetics': (0.8, 1.2),  # (low, high) ×10⁶ MSCs/L due to RBC contamination
-    'Spectra Optia': (1.5, 2.5)  # Better MSC yield
+    'Haemonetics': (1.0, 1.5),  # ×10⁶ MSCs/50mL
+    'Spectra Optia': (1.5, 2.0)  # Better yield
 }
 
-FLASK_CAPACITY = 175  # mL for T75 flask with 15-20mL media
-PASSAGE_EXPANSION = 5  # 5-fold expansion per passage
-MEDIA_CHANGE_FREQ = 2  # Recommended days between media changes
-MAX_CULTURE_DAYS = 14  # Maximum recommended culture duration
-
-GVHD_DOSING = {
-    'Grade I': (0.5, 1.0),
-    'Grade II': (1.0, 1.5),
-    'Grade III-IV': (1.5, 2.0)
+FLASK_TYPES = {
+    'T25': {'surface': 25, 'media': 5},
+    'T75': {'surface': 75, 'media': 15},
+    'T175': {'surface': 175, 'media': 30}
 }
 
-PLASMA_PRIMING_RATIO = 0.1  # 10% of PBSC volume needed for plasma priming
+GVHD_RESPONSE = {
+    'Grade I': {'base': 0.7, 'dose_factor': 0.1},
+    'Grade II': {'base': 0.5, 'dose_factor': 0.15},
+    'Grade III-IV': {'base': 0.3, 'dose_factor': 0.2}
+}
 
-def calculate_msc_parameters(weight, dose, separator, gvhd_grade, plasma_priming):
-    # Calculate total required MSCs
-    total_msc = dose * weight
+PLASMA_PRIMING_RATIO = 0.05  # 5% of PBSC volume
+
+def calculate_msc_therapy(weight, dose, separator, gvhd_grade, flask_type, media_freq, plasma_priming):
+    # Calculate total MSCs needed
+    total_msc = dose * weight  # ×10⁶ cells
     
-    # Get yield range based on separator
+    # Calculate required PBSC volume (fixed to reasonable 50mL collection)
+    pbsc_volume = 0.05  # 50mL standard collection
     yield_low, yield_high = MSC_YIELD[separator]
     
-    # Calculate required PBSC volume
-    pbsc_volume_low = total_msc / yield_high
-    pbsc_volume_high = total_msc / yield_low
+    # Calculate flasks needed (always 1 passage)
+    cells_per_flask = FLASK_TYPES[flask_type]['surface'] * 1e4  # 10,000 cells/cm²
+    flasks = int(np.ceil(total_msc * 1e6 / cells_per_flask))
     
-    # Calculate flasks needed
-    flasks = int(np.ceil(pbsc_volume_high / (FLASK_CAPACITY/1000)))  # Convert flask capacity to liters
+    # Culture duration
+    culture_days = min(14, (flasks * media_freq * 2))  # Max 14 days
     
-    # Calculate culture duration and passages
-    passages = max(1, int(np.ceil(np.log(total_msc/1e6)/np.log(PASSAGE_EXPANSION))))
-    culture_days = min(passages * MEDIA_CHANGE_FREQ * 2, MAX_CULTURE_DAYS)
+    # Plasma volume (5% of PBSC volume)
+    plasma_volume = pbsc_volume * PLASMA_PRIMING_RATIO if plasma_priming else 0
     
-    # Plasma priming calculation
-    plasma_volume = pbsc_volume_high * PLASMA_PRIMING_RATIO if plasma_priming else 0
+    # Media calculation
+    media_per_flask = FLASK_TYPES[flask_type]['media']
+    total_media = media_per_flask * flasks * (culture_days/media_freq)
     
     return {
-        'pbsc_volume': (pbsc_volume_low, pbsc_volume_high),
+        'pbsc_volume': pbsc_volume,
         'flasks': flasks,
-        'passages': passages,
+        'passages': 1,  # Fixed to 1 passage
         'culture_days': culture_days,
         'plasma_volume': plasma_volume,
-        'recommended_dose': GVHD_DOSING[gvhd_grade]
+        'total_media': total_media,
+        'recommended_dose': GVHD_DOSING[gvhd_grade],
+        'yield_range': (yield_low, yield_high)
     }
+
+def plot_growth_curve(days):
+    x = np.linspace(0, days, 100)
+    y = 1 / (1 + np.exp(-0.5*(x-3)))  # Sigmoid growth curve
+    fig, ax = plt.subplots()
+    ax.plot(x, y, 'b-', linewidth=2)
+    ax.set_xlabel('Culture Days')
+    ax.set_ylabel('Relative MSC Growth')
+    ax.set_title('Expected MSC Growth Curve')
+    ax.grid(True, alpha=0.3)
+    return fig
+
+def plot_response_curve(grade, dose):
+    base = GVHD_RESPONSE[grade]['base']
+    factor = GVHD_RESPONSE[grade]['dose_factor']
+    doses = np.linspace(0.5, 2.0, 100)
+    response = base + factor*(doses-0.5)
+    response = np.clip(response, 0, 0.95)
+    
+    fig, ax = plt.subplots()
+    ax.plot(doses, response*100, 'r-', linewidth=2)
+    ax.axvline(dose, color='k', linestyle='--')
+    ax.set_xlabel('Dose (×10⁶ MSCs/kg)')
+    ax.set_ylabel('Probability of Response (%)')
+    ax.set_title(f'GVHD {grade} Response Probability')
+    ax.grid(True, alpha=0.3)
+    return fig
 
 def main():
     st.set_page_config(page_title="MSC Therapy Calculator", layout="wide")
-    st.title("Donor MSC Therapy Calculator for GVHD")
+    st.title("Advanced MSC Therapy Calculator for GVHD")
     
-    # Input parameters
+    # Inputs
     with st.sidebar:
         st.header("Patient Parameters")
-        weight = st.slider("Patient Weight (kg)", 30, 120, 70)
-        gvhd_grade = st.selectbox("GVHD Grade", list(GVHD_DOSING.keys()))
+        weight = st.slider("Weight (kg)", 30, 120, 70)
+        gvhd_grade = st.selectbox("GVHD Grade", list(GVHD_RESPONSE.keys()))
         dose = st.slider("Desired Dose (×10⁶ MSCs/kg)", 0.5, 2.0, 1.0, 0.1)
-        separator = st.selectbox("Cell Separator", ['Haemonetics', 'Spectra Optia'])
+        
+        st.header("Lab Parameters")
+        separator = st.selectbox("Cell Separator", list(MSC_YIELD.keys()))
+        flask_type = st.selectbox("Flask Type", list(FLASK_TYPES.keys()))
+        media_freq = st.slider("Media Change Frequency (days)", 1, 4, 2)
         plasma_priming = st.checkbox("Include Plasma Priming")
     
     # Calculations
-    results = calculate_msc_parameters(weight, dose, separator, gvhd_grade, plasma_priming)
+    results = calculate_msc_therapy(weight, dose, separator, gvhd_grade, flask_type, media_freq, plasma_priming)
     
-    # Display results
+    # Results
     st.header("Therapy Parameters")
     col1, col2, col3 = st.columns(3)
     
     with col1:
-        st.metric("Required PBSC Volume", 
-                 f"{results['pbsc_volume'][0]:.1f}-{results['pbsc_volume'][1]:.1f} L")
-        st.metric("T75 Flasks Required", results['flasks'])
+        st.metric("PBSC Volume Needed", f"{results['pbsc_volume']*1000:.0f} mL")
+        st.metric(f"{flask_type} Flasks Needed", results['flasks'])
         
     with col2:
-        st.metric("Estimated Passages", results['passages'])
+        st.metric("Passages Needed", results['passages'])
         st.metric("Culture Duration", f"{results['culture_days']} days")
         
     with col3:
         if plasma_priming:
-            st.metric("Plasma Volume Needed", f"{results['plasma_volume']:.1f} L")
-        st.metric("Recommended Dose Range", 
-                 f"{results['recommended_dose'][0]}-{results['recommended_dose'][1]} ×10⁶/kg")
+            st.metric("Plasma Volume Needed", f"{results['plasma_volume']*1000:.0f} mL")
+        st.metric("Total Media Needed", f"{results['total_media']:.0f} mL")
     
-    # GVHD Efficacy Plot
-    st.header("Clinical Efficacy by Dose")
-    grades = list(GVHD_DOSING.keys())
-    response_rates = [60, 75, 85]  # Hypothetical response rates based on literature
+    # Plots
+    st.header("Growth and Response Projections")
+    col1, col2 = st.columns(2)
     
-    fig, ax = plt.subplots()
-    bars = ax.bar(grades, response_rates, color=['#4CAF50', '#FFC107', '#F44336'])
+    with col1:
+        st.pyplot(plot_growth_curve(results['culture_days']))
     
-    ax.set_ylabel('Response Rate (%)')
-    ax.set_ylim(0, 100)
-    ax.set_title('Estimated Clinical Response by GVHD Grade')
-    
-    # Add dose ranges to bars
-    for bar, grade in zip(bars, grades):
-        height = bar.get_height()
-        ax.text(bar.get_x() + bar.get_width()/2., height,
-                f'{GVHD_DOSING[grade][0]}-{GVHD_DOSING[grade][1]} ×10⁶/kg',
-                ha='center', va='bottom')
-    
-    st.pyplot(fig)
+    with col2:
+        st.pyplot(plot_response_curve(gvhd_grade, dose))
     
     # Protocol Notes
-    st.header("Protocol Considerations")
-    st.markdown("""
-    **Cell Separation:**
-    - Spectra Optia recommended for better MSC yield (1.5-2.5×10⁶ MSCs/L)
-    - Haemonetics yields 0.8-1.2×10⁶ MSCs/L due to higher RBC contamination
-    - Process within 6 hours of collection
-
-    **Culture Conditions:**
-    - Maintain at 37°C with 5% CO₂
-    - Media change every 2 days (maximum 4 days)
-    - Monitor confluence daily
-    - Typical expansion: 5-fold per passage
-
-    **Quality Control:**
-    - Surface markers: CD73+/CD90+/CD105+ > 95%
-    - Hematopoietic exclusion: CD45- < 2%
-    - Sterility testing required before infusion
-    - Minimum viability: >90% by trypan blue
-
-    **Clinical Considerations:**
-    - Grade I: Start with lower dose (0.5-1.0×10⁶/kg)
-    - Grade III-IV: May require higher doses (1.5-2.0×10⁶/kg)
-    - Consider plasma priming for enhanced efficacy
-    """)
+    st.header("Protocol Recommendations")
+    st.markdown(f"""
+    **For GVHD {gvhd_grade}:**
+    - Recommended dose range: {results['recommended_dose'][0]}–{results['recommended_dose'][1]} ×10⁶ MSCs/kg
+    - Expected yield: {results['yield_range'][0]}–{results['yield_range'][1]} ×10⁶ MSCs/50mL
+    - Optimal media change: Every {media_freq} days
     
-    # References
-    st.header("References")
-    st.markdown("""
-    1. [Frontiers in Immunology (2021)](https://www.frontiersin.org/articles/10.3389/fimmu.2021.761616)
-    2. [Stem Cell Research & Therapy (2020)](https://stemcellres.biomedcentral.com/articles/10.1186/s13287-020-01659-x)
-    3. [Blood (2005)](https://ashpublications.org/blood/article/105/4/1815/20380/Human-mesenchymal-stem-cells-modulate-allogeneic)
+    **Culture Setup:**
+    - Flask type: {flask_type}
+    - Media volume per flask: {FLASK_TYPES[flask_type]['media']} mL
+    - Target confluence: 70-80% before harvest
+    
+    **Quality Control:**
+    - Viability >90%
+    - CD73+/CD90+/CD105+ >95%
+    - CD45- <2%
     """)
 
 if __name__ == "__main__":
