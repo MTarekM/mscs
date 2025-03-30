@@ -5,9 +5,10 @@ import math
 
 # Constants with validation
 SEEDING_DENSITY = 5000  # cells/cm² (applied per flask)
-GROWTH_RATE = 0.5       # doublings per day (no longer used in discrete passage model)
-MIN_CULTURE_DAYS = 14   # fixed culture period per passage (media changes on days 1,4,7,11 and passage at day 14)
-# TARGET_CONFLUENCY is no longer used in these calculations
+GROWTH_RATE = 0.5       # doublings per day (used for intra-passage exponential growth)
+MIN_PASSAGE1_DAYS = 14  # Fixed duration for the first passage (includes trypsinization)
+ADDITIONAL_PASSAGE_DAYS = 7  # Each subsequent passage lasts 7 days
+MAX_PASSAGES = 3       # Maximum number of passages allowed
 
 # Clinical parameters with fallbacks
 GVHD_RESPONSE = {
@@ -17,7 +18,7 @@ GVHD_RESPONSE = {
     'Default': {'min_dose': 1.0, 'max_dose': 1.5, 'response': [50, 70]}  # Fallback
 }
 
-# Cell separator yields (cells/mL) with validation (for PBSC volume calculation)
+# Cell separator yields (cells/mL) with validation
 SEPARATOR_YIELD = {
     'Haemonetics': 1.0e6,
     'Spectra Optia': 2.0e6,
@@ -25,7 +26,7 @@ SEPARATOR_YIELD = {
 }
 
 # Flask parameters with validation
-# Note: max_cells is the maximum cell count attainable in a given flask at confluency.
+# Note: max_cells is the maximum number of cells obtainable in that flask at confluency.
 FLASK_TYPES = {
     'T25': {'surface': 25, 'media': 5, 'max_cells': 2.5e5},
     'T75': {'surface': 75, 'media': 15, 'max_cells': 2.0e6},
@@ -37,137 +38,137 @@ def safe_get(dictionary, key, default_key='Default'):
     """Safely get dictionary value with fallback"""
     return dictionary.get(key, dictionary.get(default_key))
 
-def calculate_msc_therapy(weight, desired_dose, separator, flask_type, media_freq):
-    """
-    Revised calculation that:
-      - Limits expansion to 3 passages (each 14 days)
-      - Uses fixed media change schedule (days 1,4,7,11 per passage)
-      - Computes yield at each passage based on flask seeding density and maximum cell capacity.
-    
-    Assumptions:
-      * Initial culture is started in one flask with cells seeded = (flask surface * SEEDING_DENSITY).
-      * At confluency (day 14), a flask yields up to flask_data['max_cells'] cells.
-      * For subsequent passages, cells are split into as many flasks as needed so that each receives the ideal seeding count.
-      * Total yield after each passage is computed and compared with the target dose.
-      * If the target dose is reached before passage 3, that passage is used; otherwise, the best yield after 3 passages is used.
-    """
+def calculate_msc_therapy(weight, desired_dose, separator, flask_type):
     # Validate inputs
     weight = max(30, min(weight, 120))              # in kg
     desired_dose = max(0.5, min(desired_dose, 2.0))   # in ×10⁶/kg
-    media_freq = max(1, min(media_freq, 4))           # not used in fixed schedule below
-
+    
     # Get parameters with fallbacks
     sep_yield = safe_get(SEPARATOR_YIELD, separator)
     flask_data = safe_get(FLASK_TYPES, flask_type)
     
     # Total cell dose needed (absolute number of cells)
-    target_cells = desired_dose * weight * 1e6  # Convert from ×10⁶ to absolute cells
+    total_cells = desired_dose * weight * 1e6  # Convert ×10⁶/kg to cells
     
-    # Calculate PBSC volume (mL) needed from separator yield
+    # Calculate PBSC volume (mL)
     try:
-        pbsc_ml = target_cells / sep_yield
+        pbsc_ml = total_cells / sep_yield
     except Exception:
-        pbsc_ml = 50  # Fallback to 50 mL if any issue
+        pbsc_ml = 50  # Fallback
     pbsc_ml = max(50, pbsc_ml)
     
-    # Determine ideal seeding density (cells per flask) from flask surface
-    initial_seeding = flask_data['surface'] * SEEDING_DENSITY  # cells seeded in one flask
+    # Determine initial cells seeded in one flask
+    initial_cells = flask_data['surface'] * SEEDING_DENSITY  # cells per flask
     
-    # --- Calculate yield per passage (discrete model) ---
-    # Passage 1 (14 days): starting with 1 flask
-    yield_p1 = flask_data['max_cells']  # one flask grows to max capacity
-    
-    # Passage 2 (days 15-28):
-    # The cells from passage 1 are split into as many flasks as needed,
-    # with each flask receiving the ideal seeding count.
-    flasks_needed_p2 = math.ceil(yield_p1 / initial_seeding)
-    yield_p2 = flasks_needed_p2 * flask_data['max_cells']
-    
-    # Passage 3 (days 29-42):
-    flasks_needed_p3 = math.ceil(yield_p2 / initial_seeding)
-    yield_p3 = flasks_needed_p3 * flask_data['max_cells']
-    
-    # --- Determine which passage yields the target dose (limit to 3 passages) ---
-    if yield_p1 >= target_cells:
-        passage_needed = 1
-        final_yield = target_cells  # assume we harvest exactly target dose
-    elif yield_p2 >= target_cells:
-        passage_needed = 2
-        final_yield = target_cells
-    elif yield_p3 >= target_cells:
-        passage_needed = 3
-        final_yield = target_cells
-    else:
-        passage_needed = 3
-        final_yield = yield_p3  # even after 3 passages, target not met; use best yield
-    
-    total_days = passage_needed * MIN_CULTURE_DAYS  # 14 days per passage
-    
-    # Final number of flasks in the final passage required to yield the target (or best yield)
-    final_flasks = math.ceil(final_yield / flask_data['max_cells'])
-    
-    # --- Media calculation ---
-    # Instead of using media_freq, we use the fixed schedule:
-    # For each passage, media is changed on days 1, 4, 7, 11 (4 changes per 14-day block)
-    # The number of flasks used in each passage is:
-    # Passage 1: assume 1 flask
-    # Passage 2: flasks_needed_p2
-    # Passage 3: flasks_needed_p3
-    media_p1 = 1 * flask_data['media'] * 4
-    media_p2 = flasks_needed_p2 * flask_data['media'] * 4 if passage_needed >= 2 else 0
-    media_p3 = flasks_needed_p3 * flask_data['media'] * 4 if passage_needed >= 3 else 0
-    total_media = media_p1 + media_p2 + media_p3
-    
+    # --- Determine the minimal number of initial flasks (N0) needed so that after up to MAX_PASSAGES the yield meets the target
+    # For each passage, cells are grown to the maximum capacity per flask.
+    # Then they are pooled and re-seeded at the initial density.
+    # Let N0 be the number of flasks initially used.
+    found = False
+    for N0 in range(1, 101):
+        # Passage 1:
+        passage1_yield = N0 * flask_data['max_cells']
+        # For passage 2, cells are re-seeded:
+        flasks_p2 = math.ceil(passage1_yield / initial_cells)
+        passage2_yield = flasks_p2 * flask_data['max_cells']
+        # For passage 3:
+        flasks_p3 = math.ceil(passage2_yield / initial_cells)
+        passage3_yield = flasks_p3 * flask_data['max_cells']
+        
+        final_yield = passage3_yield  # Maximum obtainable with 3 passages
+        if final_yield >= total_cells:
+            initial_flasks = N0
+            found = True
+            break
+    if not found:
+        # If even 100 flasks aren’t enough, take the best obtainable yield
+        initial_flasks = 100
+        flasks_p2 = math.ceil((initial_flasks * flask_data['max_cells']) / initial_cells)
+        flasks_p3 = math.ceil((flasks_p2 * flask_data['max_cells']) / initial_cells)
+        passage3_yield = flasks_p3 * flask_data['max_cells']
+        final_yield = passage3_yield
+
+    # Total culture duration:
+    # Passage 1 takes MIN_PASSAGE1_DAYS and each subsequent passage adds ADDITIONAL_PASSAGE_DAYS.
+    total_days = MIN_PASSAGE1_DAYS + (MAX_PASSAGES - 1) * ADDITIONAL_PASSAGE_DAYS
+
+    # Media changes:
+    # Passage 1: media changes on days 1,4,7,11  → 4 changes
+    # Passage 2 and 3 (each 7 days): assume 2 changes each.
+    total_media_changes = 4 + 2 * (MAX_PASSAGES - 1)
+    total_media = initial_flasks * flask_data['media'] * total_media_changes
+
     return {
         'pbsc_ml': pbsc_ml,
-        'final_flasks': final_flasks,
-        'passages': passage_needed,
+        'initial_flasks': initial_flasks,
+        'passages': MAX_PASSAGES,
         'total_days': total_days,
         'total_media': total_media,
-        'initial_seeding': initial_seeding,
-        'target_cells': target_cells,
-        'yield_p1': yield_p1,
-        'yield_p2': yield_p2,
-        'yield_p3': yield_p3,
-        'flasks_p2': flasks_needed_p2,
-        'flasks_p3': flasks_needed_p3
+        'initial_cells': initial_cells,
+        'target_cells': total_cells,
+        'passage1_yield': initial_flasks * flask_data['max_cells'],
+        'flasks_p2': math.ceil((initial_flasks * flask_data['max_cells']) / initial_cells),
+        'passage2_yield': math.ceil((initial_flasks * flask_data['max_cells']) / initial_cells) * flask_data['max_cells'],
+        'flasks_p3': math.ceil((math.ceil((initial_flasks * flask_data['max_cells']) / initial_cells) * flask_data['max_cells']) / initial_cells),
+        'passage3_yield': math.ceil((math.ceil((initial_flasks * flask_data['max_cells']) / initial_cells) * flask_data['max_cells']) / initial_cells) * flask_data['max_cells'],
     }
 
-def plot_growth_curve(results):
+def plot_growth_curve(results, flask_data):
     """
-    Plot a stepwise growth curve using the discrete passage model.
-    
-    The x-axis marks the end of each passage (14, 28, 42 days).
-    The y-axis shows the cell yield.
-    If the target dose is reached before 3 passages, the yield is capped at the target.
+    Plots a piecewise growth curve showing overall cell yield over time.
+    Passage 1: from day 0 to MIN_PASSAGE1_DAYS, exponential growth from (N0*initial_cells) to passage1_yield.
+    Passage 2: next ADDITIONAL_PASSAGE_DAYS days, from (flasks_p2*initial_cells) to passage2_yield.
+    Passage 3: next ADDITIONAL_PASSAGE_DAYS days, from (flasks_p3*initial_cells) to passage3_yield.
     """
-    # Define time points (in days) and corresponding yields
-    time_points = [0, MIN_CULTURE_DAYS]  # start and end of passage 1
-    yields = [results['initial_seeding'], results['yield_p1']]
+    initial_cells = results['initial_cells']
+    N0 = results['initial_flasks']
     
-    # Add passage 2 if applicable
-    if results['passages'] >= 2:
-        time_points.append(MIN_CULTURE_DAYS*2)
-        yields.append(results['yield_p2'])
-    # Add passage 3 if applicable
-    if results['passages'] >= 3:
-        time_points.append(MIN_CULTURE_DAYS*3)
-        yields.append(results['yield_p3'])
+    # Calculate starting yields for each passage:
+    start1 = N0 * initial_cells
+    end1 = results['passage1_yield']
     
-    # If target is reached before the last passage, cap the yield
-    if yields[-1] > results['target_cells']:
-        yields[-1] = results['target_cells']
+    flasks_p2 = results['flasks_p2']
+    start2 = flasks_p2 * initial_cells
+    end2 = results['passage2_yield']
     
-    # Create a stepwise plot
+    flasks_p3 = results['flasks_p3']
+    start3 = flasks_p3 * initial_cells
+    end3 = results['passage3_yield']
+    
+    # Define time segments
+    t1 = np.linspace(0, MIN_PASSAGE1_DAYS, 100)
+    t2 = np.linspace(MIN_PASSAGE1_DAYS, MIN_PASSAGE1_DAYS + ADDITIONAL_PASSAGE_DAYS, 100)
+    t3 = np.linspace(MIN_PASSAGE1_DAYS + ADDITIONAL_PASSAGE_DAYS, results['total_days'], 100)
+    
+    # Exponential growth in each segment (using the appropriate growth rate calculated from endpoints)
+    # For segment 1:
+    factor1 = end1 / start1 if start1 > 0 else 1
+    rate1 = np.log(factor1) / (MIN_PASSAGE1_DAYS)
+    growth1 = start1 * np.exp(rate1 * t1)
+    
+    # For segment 2:
+    factor2 = end2 / start2 if start2 > 0 else 1
+    rate2 = np.log(factor2) / (ADDITIONAL_PASSAGE_DAYS)
+    growth2 = start2 * np.exp(rate2 * (t2 - MIN_PASSAGE1_DAYS))
+    
+    # For segment 3:
+    factor3 = end3 / start3 if start3 > 0 else 1
+    rate3 = np.log(factor3) / (ADDITIONAL_PASSAGE_DAYS)
+    growth3 = start3 * np.exp(rate3 * (t3 - (MIN_PASSAGE1_DAYS + ADDITIONAL_PASSAGE_DAYS)))
+    
+    # Combine segments
+    t_total = np.concatenate([t1, t2, t3])
+    growth_total = np.concatenate([growth1, growth2, growth3])
+    
     fig, ax = plt.subplots()
-    ax.step(time_points, yields, where='post', label='Cell Yield', linewidth=2)
-    ax.plot(time_points, yields, 'o', color='red')
-    ax.axhline(results['target_cells'], color='gray', linestyle='--', label='Target Cells')
-    ax.set_xlabel("Culture Days")
-    ax.set_ylabel("Cell Count (absolute)")
-    ax.set_title("Growth Projection (Discrete Passage Model)")
-    ax.grid(True)
+    ax.plot(t_total, growth_total, 'g-', label='Overall MSC Yield')
+    # Plot horizontal lines showing target and best obtainable yield
+    ax.axhline(results['target_cells'], color='r', linestyle='--', label='Desired Dose')
+    ax.axhline(end3, color='b', linestyle='--', label='Max obtainable (3 passages)')
+    ax.set_xlabel('Culture Days')
+    ax.set_ylabel('Total Cells')
     ax.legend()
+    ax.grid(True)
     return fig
 
 def main():
@@ -183,23 +184,22 @@ def main():
         st.header("Lab Parameters")
         separator = st.selectbox("Cell Separator", list(SEPARATOR_YIELD.keys()))
         flask_type = st.selectbox("Flask Type", list(FLASK_TYPES.keys()))
-        # Note: Media change frequency is fixed by the protocol (days 1,4,7,11), so this slider is not used.
-        media_freq = st.slider("Media Change Frequency (days)", 1, 4, 2)
     
     # Get grade data with fallback
     grade_data = safe_get(GVHD_RESPONSE, gvhd_grade)
     
     # Calculate therapy parameters
-    results = calculate_msc_therapy(weight, desired_dose, separator, flask_type, media_freq)
+    results = calculate_msc_therapy(weight, desired_dose, separator, flask_type)
+    flask_data = safe_get(FLASK_TYPES, flask_type)
     
     # Display results
     st.header("Therapy Parameters")
     col1, col2, col3 = st.columns(3)
     with col1:
         st.metric("PBSC Volume", f"{results['pbsc_ml']:.0f} mL")
-        st.metric("Final Flask Count (Passage {0})".format(results['passages']), results['final_flasks'])
+        st.metric("Initial Flasks Needed", results['initial_flasks'])
     with col2:
-        st.metric("Passages", results['passages'])
+        st.metric("Total Passages", results['passages'])
         st.metric("Culture Duration", f"{results['total_days']} days")
     with col3:
         st.metric("Total Media", f"{results['total_media']:.0f} mL")
@@ -208,7 +208,7 @@ def main():
     # Growth curve plot
     st.header("Growth Projection")
     try:
-        plot_fig = plot_growth_curve(results)
+        plot_fig = plot_growth_curve(results, flask_data)
         st.pyplot(plot_fig)
     except Exception as e:
         st.warning("Could not generate growth curve with current parameters")
@@ -221,17 +221,16 @@ def main():
     - Expected response: {grade_data['response'][0]}–{grade_data['response'][1]}%
     
     **Culture Protocol:**
-    - **Passage Limit:** Maximum of 3 passages. If the target dose is not met by Passage 3, proceed with cryopreservation or infusion of the best‐obtained dose.
-    - **Media Schedule:** Media changes on days 1, 4, 7, and 11 of each 14‑day passage.
-    - **Passage Timing:** First passage (trypsinization) is done at day 14.
-    - **Flask Details:** 
-         - Seeding density: {SEEDING_DENSITY:,} cells/cm² (per flask)
-         - {flask_type} Flask with surface area of {safe_get(FLASK_TYPES, flask_type)['surface']} cm² and maximum capacity of {safe_get(FLASK_TYPES, flask_type)['max_cells']:,} cells.
-    - **Expansion Estimates:**
-         - Passage 1 yield: ~{results['yield_p1']:.0f} cells.
-         - Passage 2 yield: ~{results['yield_p2']:.0f} cells (using ~{results['flasks_p2']} flask(s)).
-         - Passage 3 yield: ~{results['yield_p3']:.0f} cells (using ~{results['flasks_p3']} flask(s)).
-    - **Overall:** Culture duration is {results['total_days']} days (14 days per passage), and media consumption is estimated at {results['total_media']:.0f} mL.
+    - Seeding density: {SEEDING_DENSITY:,} cells/cm² (per flask)
+    - Flask type: {flask_type} with surface area {flask_data['surface']} cm² and max capacity {flask_data['max_cells']:,} cells
+    - **Passage Schedule:**  
+      - Passage 1: 14 days (media changes on days 1,4,7,11)  
+      - Passage 2 & 3: 7 days each (assumed 2 media changes per passage)  
+      - Total maximum passages: {MAX_PASSAGES} (beyond which cryopreservation or infusion is recommended)
+    - Initial flasks required: {results['initial_flasks']}
+    - Final yield (after 3 passages): {results['passage3_yield']:,} cells
+    - Culture duration: {results['total_days']} days
+    - Total media used: {results['total_media']:.0f} mL
     
     **Quality Control:**
     - Viability >90% (Trypan Blue)
