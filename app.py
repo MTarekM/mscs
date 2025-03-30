@@ -108,8 +108,6 @@ def plot_growth_curve(initial, target, days):
     days = max(1, days)
     
     x = np.linspace(0, days, 100)
-    # Simulate exponential growth: initial cells * 2^(doublings)
-    # Here we assume a constant doubling rate given by GROWTH_RATE.
     growth = initial * np.power(2, GROWTH_RATE * x)
     
     # Limit growth to the target (simulate plateau)
@@ -126,6 +124,7 @@ def plot_growth_curve(initial, target, days):
     ax.legend()
     ax.grid(True)
     return fig
+
 
 def main():
     st.set_page_config(page_title="MSC Therapy Calculator", layout="wide")
@@ -168,8 +167,9 @@ def main():
         # Use the initial seeding from one flask and target as the final cell count per flask
         # (for plotting we use the expansion in one flask)
         plot_fig = plot_growth_curve(results['initial_cells'], 
-                                  results['initial_cells'] * results['expansion_factor'],
-                                  results['days_per_passage'])
+                             results['initial_cells'] * results['expansion_factor'],
+                             results['days_per_passage'])
+
         st.pyplot(plot_fig)
     except Exception as e:
         st.warning("Could not generate growth curve with current parameters")
