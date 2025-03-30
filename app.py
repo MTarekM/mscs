@@ -3,355 +3,176 @@ import matplotlib.pyplot as plt
 import numpy as np
 import math
 
-# Updated Constants with literature support
-SEEDING_DENSITY = 5.0e4  # cells/cm² (optimized based on literature: 5×10⁴ cells/cm²)
-GROWTH_RATE = 0.5       # doublings per day (for intra-passage exponential growth)
-MIN_PASSAGE1_DAYS = 14  # Fixed duration for first passage (includes trypsinization)
-ADDITIONAL_PASSAGE_DAYS = 7  # Each subsequent passage lasts 7 days
-MAX_PASSAGES = 3       # Maximum number of passages allowed
-SAFETY_FACTOR = 1.2    # Safety factor for re-seeding losses
-PLASMA_PERCENTAGE = 0.15  # 15% of initial media volume for priming (literature-based)
-MAX_PBSC_VOLUME = 50   # Maximum PBSC collection volume in mL (G-CSF mobilized)
+# Constants from reference table
+FLASK_DATA = {
+    'T-25': {
+        'surface_cm2': 25,
+        'seeding_cells': 0.7e6,
+        'max_cells': 2.8e6,
+        'media_ml': 5  # Using upper end of 3-5ml range
+    },
+    'T-75': {
+        'surface_cm2': 75,
+        'seeding_cells': 2.1e6,
+        'max_cells': 8.4e6,
+        'media_ml': 15  # Using upper end of 8-15ml range
+    },
+    'T-160': {
+        'surface_cm2': 160,
+        'seeding_cells': 4.6e6,
+        'max_cells': 18.4e6,
+        'media_ml': 30  # Using upper end of 15-30ml range
+    }
+}
 
-# Clinical parameters with fallbacks
+# Clinical parameters
 GVHD_RESPONSE = {
     'Grade I': {'min_dose': 0.5, 'max_dose': 1.0, 'response': [60, 80]},
     'Grade II': {'min_dose': 1.0, 'max_dose': 1.5, 'response': [50, 70]},
-    'Grade III-IV': {'min_dose': 1.5, 'max_dose': 2.0, 'response': [40, 60]},
-    'Default': {'min_dose': 1.0, 'max_dose': 1.5, 'response': [50, 70]}  # Fallback
+    'Grade III-IV': {'min_dose': 1.5, 'max_dose': 2.0, 'response': [40, 60]}
 }
 
-# Cell separator yields (cells/mL) with validation
 SEPARATOR_YIELD = {
     'Haemonetics': 1.0e6,
-    'Spectra Optia': 2.0e6,
-    'Default': 1.5e6  # Fallback
+    'Spectra Optia': 2.0e6
 }
 
-# Updated Flask parameters based on reference image (converted from mm² to cm²)
-FLASK_TYPES = {
-    'T25': {
-        'surface': 25,       # cm² (from 2,500 mm²)
-        'media': 5,          # mL (3-5 mL range)
-        'initial_cells': 0.7e6,  # From reference table
-        'max_cells': 2.8e6   # From reference table
-    },
-    'T75': {
-        'surface': 75,       # cm² (from 7,500 mm²)
-        'media': 15,         # mL (8-15 mL range)
-        'initial_cells': 2.1e6,
-        'max_cells': 8.4e6
-    },
-    'T175': {
-        'surface': 175,      # cm² (approximated from T-160)
-        'media': 30,         # mL (15-30 mL range)
-        'initial_cells': 4.6e6,
-        'max_cells': 18.4e6
-    },
-    'Default': {
-        'surface': 75,
-        'media': 15,
-        'initial_cells': 2.1e6,
-        'max_cells': 8.4e6
-    }
-}
+# Culture parameters
+SAFETY_FACTOR = 1.2
+MAX_PASSAGES = 3
+MIN_PASSAGE1_DAYS = 14
+ADDITIONAL_PASSAGE_DAYS = 7
+PLASMA_PERCENTAGE = 0.15
+MAX_PBSC_VOLUME = 50  # ml
 
-def safe_get(dictionary, key, default_key='Default'):
-    """Safely get dictionary value with fallback"""
-    return dictionary.get(key, dictionary.get(default_key))
-
-def calculate_msc_therapy(weight, desired_dose, separator, flask_type, plasma_priming=False):
+def calculate_therapy(weight, desired_dose, separator, flask_type, plasma_priming):
     # Validate inputs
-    weight = max(30, min(weight, 120))              # in kg
-    desired_dose = max(0.5, min(desired_dose, 2.0))   # in ×10⁶/kg
+    weight = max(8.0, min(weight, 120.0))
+    desired_dose = max(0.5, min(desired_dose, 2.0))
     
-    # Get parameters with fallbacks
-    sep_yield = safe_get(SEPARATOR_YIELD, separator)
-    flask_data = safe_get(FLASK_TYPES, flask_type)
+    # Get equipment parameters
+    flask = FLASK_DATA.get(flask_type, FLASK_DATA['T-75'])
+    sep_yield = SEPARATOR_YIELD.get(separator, 1.5e6)
     
-    # Total cell dose needed (absolute number of cells)
-    total_cells = desired_dose * weight * 1e6  # Convert ×10⁶/kg to cells
+    # Calculate required cells
+    target_cells = desired_dose * weight * 1e6
     
-    # Calculate PBSC volume (mL) with maximum limit of 50mL
-    try:
-        pbsc_ml = min(total_cells / sep_yield, MAX_PBSC_VOLUME)
-    except Exception:
-        pbsc_ml = MAX_PBSC_VOLUME  # Fallback to maximum
+    # PBSC volume calculation
+    pbsc_ml = min(target_cells / sep_yield, MAX_PBSC_VOLUME)
     
-    # Determine initial cells seeded per flask from reference table
-    initial_cells_per_flask = flask_data['initial_cells']
-    
-    # Calculate required initial flasks (N0) through iterative passage simulation
-    found = False
-    for N0 in range(1, 201):  # Search up to 200 initial flasks
-        # Passage 1: N0 flasks to confluency
-        passage1_yield = N0 * flask_data['max_cells']
+    # Flask calculations
+    initial_flasks = None
+    for N0 in range(1, 201):
+        p1 = N0 * flask['max_cells']
         
-        if passage1_yield >= total_cells:
+        if p1 >= target_cells:
             initial_flasks = N0
-            flasks_p2 = 0
-            flasks_p3 = 0
-            passage2_yield = passage1_yield
-            passage3_yield = passage1_yield
-            found = True
+            p2, p3 = 0, 0
             break
         
-        # Passage 2: calculate needed flasks with safety factor
-        flasks_p2 = math.ceil((passage1_yield / initial_cells_per_flask) * SAFETY_FACTOR)
-        passage2_yield = flasks_p2 * flask_data['max_cells']
+        n2 = math.ceil((p1 / flask['seeding_cells']) * SAFETY_FACTOR)
+        p2 = n2 * flask['max_cells']
         
-        if passage2_yield >= total_cells:
+        if p2 >= target_cells:
             initial_flasks = N0
-            flasks_p3 = 0
-            passage3_yield = passage2_yield
-            found = True
+            p3 = 0
             break
         
-        # Passage 3: calculate needed flasks with safety factor
-        flasks_p3 = math.ceil((passage2_yield / initial_cells_per_flask) * SAFETY_FACTOR)
-        passage3_yield = flasks_p3 * flask_data['max_cells']
+        n3 = math.ceil((p2 / flask['seeding_cells']) * SAFETY_FACTOR)
+        p3 = n3 * flask['max_cells']
         
-        if passage3_yield >= total_cells:
+        if p3 >= target_cells:
             initial_flasks = N0
-            found = True
             break
     
-    if not found:
+    if not initial_flasks:
         initial_flasks = 200
-        flasks_p2 = math.ceil((initial_flasks * flask_data['max_cells'] / initial_cells_per_flask) * SAFETY_FACTOR)
-        flasks_p3 = math.ceil((flasks_p2 * flask_data['max_cells'] / initial_cells_per_flask) * SAFETY_FACTOR)
-        passage3_yield = flasks_p3 * flask_data['max_cells']
-
-    # Calculate total culture duration
-    if passage1_yield >= total_cells:
-        total_days = MIN_PASSAGE1_DAYS
-        passages_used = 1
-    elif passage2_yield >= total_cells:
-        total_days = MIN_PASSAGE1_DAYS + ADDITIONAL_PASSAGE_DAYS
-        passages_used = 2
-    else:
-        total_days = MIN_PASSAGE1_DAYS + 2 * ADDITIONAL_PASSAGE_DAYS
-        passages_used = 3
-
-    # Media calculations - using upper range from reference table
-    media_per_flask = flask_data['media']
-    total_media_changes = 4 + (passages_used - 1) * 2  # 4 changes for P1, 2 for each subsequent
-    total_media_volume = initial_flasks * media_per_flask * total_media_changes
-
-    # Plasma priming volume (15% of initial media preparation)
-    if plasma_priming:
-        plasma_volume = math.ceil(initial_flasks * media_per_flask * PLASMA_PERCENTAGE)
-    else:
-        plasma_volume = 0
-
+        n2 = math.ceil((initial_flasks * flask['max_cells'] / flask['seeding_cells']) * SAFETY_FACTOR)
+        n3 = math.ceil((n2 * flask['max_cells'] / flask['seeding_cells']) * SAFETY_FACTOR)
+        p3 = n3 * flask['max_cells']
+    
+    # Calculate culture duration
+    passages = 3 if p3 < target_cells else 2 if p2 < target_cells else 1
+    total_days = MIN_PASSAGE1_DAYS + (passages-1)*ADDITIONAL_PASSAGE_DAYS
+    
+    # Media calculations
+    media_changes = 4 + (passages-1)*2  # 4 changes for P1
+    total_media = initial_flasks * flask['media_ml'] * media_changes
+    
+    # Plasma priming
+    plasma_vol = initial_flasks * flask['media_ml'] * PLASMA_PERCENTAGE if plasma_priming else 0
+    
     return {
         'pbsc_ml': pbsc_ml,
         'initial_flasks': initial_flasks,
-        'passages': passages_used,
+        'passages': passages,
         'total_days': total_days,
-        'total_media': total_media_volume,
-        'initial_cells': initial_cells_per_flask,
-        'target_cells': total_cells,
-        'passage1_yield': passage1_yield,
-        'flasks_p2': flasks_p2,
-        'passage2_yield': passage2_yield if passages_used >= 2 else passage1_yield,
-        'flasks_p3': flasks_p3,
-        'passage3_yield': passage3_yield if passages_used >= 3 else passage2_yield,
-        'plasma_volume': plasma_volume,
-        'passages_used': passages_used,
-        'media_per_flask': media_per_flask
+        'total_media': total_media,
+        'plasma_vol': plasma_vol,
+        'target_cells': target_cells,
+        'final_cells': max(p1, p2, p3)
     }
 
-def plot_growth_curve(results, flask_data):
-    """Plots a piecewise growth curve showing overall cell yield over time."""
+def plot_growth(results, flask_type):
     try:
-        # Get values from results with fallbacks
-        initial_cells = results.get('initial_cells', 0)
-        N0 = results.get('initial_flasks', 1)
-        passage1_yield = results.get('passage1_yield', 0)
-        passage2_yield = results.get('passage2_yield', passage1_yield)
-        passage3_yield = results.get('passage3_yield', passage2_yield)
-        flasks_p2 = results.get('flasks_p2', 0)
-        flasks_p3 = results.get('flasks_p3', 0)
-        target_cells = results.get('target_cells', 0)
-        
-        # Calculate starting yields for each passage
-        start1 = N0 * initial_cells if initial_cells > 0 else 1
-        end1 = passage1_yield if passage1_yield > 0 else start1
-        
-        start2 = flasks_p2 * initial_cells if initial_cells > 0 else end1
-        end2 = passage2_yield if passage2_yield > 0 else start2
-        
-        start3 = flasks_p3 * initial_cells if initial_cells > 0 else end2
-        end3 = passage3_yield if passage3_yield > 0 else start3
-        
-        # Define time segments
-        t1 = np.linspace(0, MIN_PASSAGE1_DAYS, 100)
-        t2 = np.linspace(MIN_PASSAGE1_DAYS, MIN_PASSAGE1_DAYS + ADDITIONAL_PASSAGE_DAYS, 100)
-        t3 = np.linspace(MIN_PASSAGE1_DAYS + ADDITIONAL_PASSAGE_DAYS, 
-                        MIN_PASSAGE1_DAYS + 2 * ADDITIONAL_PASSAGE_DAYS, 100)
-        
-        # Exponential growth in each segment
-        factor1 = end1 / start1 if start1 > 0 else 1
-        rate1 = np.log(factor1) / (MIN_PASSAGE1_DAYS) if MIN_PASSAGE1_DAYS > 0 else 0
-        growth1 = start1 * np.exp(rate1 * t1)
-        
-        factor2 = end2 / start2 if start2 > 0 else 1
-        rate2 = np.log(factor2) / (ADDITIONAL_PASSAGE_DAYS) if ADDITIONAL_PASSAGE_DAYS > 0 else 0
-        growth2 = start2 * np.exp(rate2 * (t2 - MIN_PASSAGE1_DAYS))
-        
-        factor3 = end3 / start3 if start3 > 0 else 1
-        rate3 = np.log(factor3) / (ADDITIONAL_PASSAGE_DAYS) if ADDITIONAL_PASSAGE_DAYS > 0 else 0
-        growth3 = start3 * np.exp(rate3 * (t3 - (MIN_PASSAGE1_DAYS + ADDITIONAL_PASSAGE_DAYS)))
-        
-        # Combine segments
-        t_total = np.concatenate([t1, t2, t3])
-        growth_total = np.concatenate([growth1, growth2, growth3])
-        
         fig, ax = plt.subplots(figsize=(10, 6))
-        ax.plot(t_total, growth_total, 'g-', linewidth=2, label='MSC Growth Curve')
-        ax.axhline(target_cells, color='r', linestyle='--', 
-                  label=f'Target Dose ({target_cells/1e6:.1f}×10⁶ cells)')
-        ax.axhline(end3, color='b', linestyle=':', 
-                  label=f'Projected Yield ({end3/1e6:.1f}×10⁶ cells)')
+        days = [0, 14, 21, 28]
+        cells = [0, 
+                results['initial_flasks'] * FLASK_DATA[flask_type]['seeding_cells'],
+                results['initial_flasks'] * FLASK_DATA[flask_type]['max_cells'],
+                results['final_cells']]
         
-        ax.set_xlabel('Culture Time (days)', fontsize=12)
-        ax.set_ylabel('Total Cells', fontsize=12)
-        ax.set_title('MSC Expansion Projection', fontsize=14)
-        ax.legend(fontsize=10)
-        ax.grid(True, linestyle='--', alpha=0.7)
-        plt.tight_layout()
-        
+        ax.plot(days[:results['passages']+1], 
+               [x/1e6 for x in cells[:results['passages']+1]], 
+               'g-', marker='o', linewidth=2)
+        ax.axhline(results['target_cells']/1e6, color='r', linestyle='--')
+        ax.set_ylabel('Cells (×10⁶)', fontsize=12)
+        ax.set_xlabel('Culture Days', fontsize=12)
+        ax.grid(True, alpha=0.3)
         return fig
-    except Exception as e:
-        st.error(f"Error generating growth curve: {str(e)}")
-        return None
-
-def plot_gvhd_probability(grade_data, dose):
-    """Plots a predicted GVHD remission probability curve."""
-    try:
-        if not grade_data or 'min_dose' not in grade_data:
-            raise ValueError("Invalid grade data")
-        
-        min_dose = grade_data.get('min_dose', 0.5)
-        max_dose = grade_data.get('max_dose', 2.0)
-        response = grade_data.get('response', [50, 70])
-        
-        opt_dose = (min_dose + max_dose) / 2
-        lower_prob, upper_prob = response[0], response[1]
-        sigma = (max_dose - min_dose) / 3  # More gradual curve
-        
-        x = np.linspace(0.5, 2.5, 200)
-        # Sigmoid-like function for more realistic probability curve
-        y = lower_prob + (upper_prob - lower_prob) / (1 + np.exp(-(x - opt_dose)/sigma*2))
-        
-        fig, ax = plt.subplots(figsize=(10, 6))
-        ax.plot(x, y, 'b-', linewidth=2, 
-               label=f"GVHD Remission Probability ({lower_prob}-{upper_prob}%)")
-        ax.axvline(dose, color='r', linestyle='--', 
-                  label=f"Selected Dose: {dose:.2f}×10⁶/kg")
-        
-        ax.set_xlabel("MSC Dose (×10⁶ cells/kg)", fontsize=12)
-        ax.set_ylabel("Probability of Response (%)", fontsize=12)
-        ax.set_title("Dose-Response Relationship", fontsize=14)
-        ax.set_ylim(0, 100)
-        ax.legend(fontsize=10, loc='lower right')
-        ax.grid(True, linestyle='--', alpha=0.7)
-        plt.tight_layout()
-        
-        return fig
-    except Exception as e:
-        st.error(f"Error generating GVHD plot: {str(e)}")
+    except:
         return None
 
 def main():
-    st.set_page_config(page_title="MSC Therapy Calculator", layout="wide")
-    st.title("Optimized MSC Therapy Calculator (Literature-Based)")
+    st.set_page_config(page_title="Pediatric MSC Calculator", layout="wide")
+    st.header("Infant MSC Therapy Calculator (8kg+)")
     
     with st.sidebar:
-        st.header("Patient Parameters")
-        weight = st.slider("Weight (kg)", 30, 120, 70)
-        gvhd_grade = st.selectbox("GVHD Grade", list(GVHD_RESPONSE.keys()))
-        desired_dose = st.slider("Dose (×10⁶/kg)", 0.5, 2.0, 1.0, 0.1)
-        
-        st.header("Lab Parameters")
+        weight = st.slider("Patient Weight (kg)", 8.0, 120.0, 8.0)
+        grade = st.selectbox("GVHD Grade", list(GVHD_RESPONSE.keys()))
+        dose = st.slider("Target Dose (×10⁶/kg)", 0.5, 2.0, 1.0)
         separator = st.selectbox("Cell Separator", list(SEPARATOR_YIELD.keys()))
-        flask_type = st.selectbox("Flask Type", list(FLASK_TYPES.keys()))
-        plasma_priming = st.checkbox("Plasma priming from GVHD patient", value=False,
-                                   help="15% of initial media volume from GVHD patient plasma")
+        flask_type = st.selectbox("Flask Type", list(FLASK_DATA.keys()))
+        plasma = st.checkbox("Use Plasma Priming")
     
-    # Get grade data with fallback
-    grade_data = safe_get(GVHD_RESPONSE, gvhd_grade)
-    
-    # Calculate therapy parameters
-    results = calculate_msc_therapy(weight, desired_dose, separator, flask_type, plasma_priming)
-    flask_data = safe_get(FLASK_TYPES, flask_type)
+    results = calculate_therapy(weight, dose, separator, flask_type, plasma)
+    grade_info = GVHD_RESPONSE[grade]
     
     # Display results
-    st.header("Therapy Parameters")
-    col1, col2, col3, col4 = st.columns(4)
-    with col1:
-        st.metric("PBSC Volume", f"{results['pbsc_ml']:.0f} mL (max 50mL)")
-        st.metric("Initial Flasks Needed", results['initial_flasks'])
-    with col2:
-        st.metric("Passages Required", results['passages_used'])
-        st.metric("Culture Duration", f"{results['total_days']} days")
-    with col3:
-        st.metric("Total Media", f"{results['total_media']:.0f} mL")
-        st.metric("Recommended Dose", f"{grade_data['min_dose']}-{grade_data['max_dose']} ×10⁶/kg")
-    with col4:
-        if plasma_priming:
-            st.metric("Plasma Volume Needed", f"{results['plasma_volume']:.0f} mL (15% of initial media)")
-        else:
-            st.write("Plasma priming not selected")
+    cols = st.columns(4)
+    cols[0].metric("PBSC Volume", f"{results['pbsc_ml']:.1f} mL")
+    cols[1].metric("Initial Flasks", results['initial_flasks'])
+    cols[2].metric("Total Media", f"{results['total_media']} mL")
+    cols[3].metric("Culture Days", results['total_days'])
     
-    # Growth curve plot
-    st.header("Growth Projection")
-    plot_fig = plot_growth_curve(results, flask_data)
-    if plot_fig:
-        st.pyplot(plot_fig)
+    # Plots
+    growth_fig = plot_growth(results, flask_type)
+    if growth_fig:
+        st.pyplot(growth_fig)
     else:
-        st.warning("Could not generate growth curve with current parameters")
+        st.warning("Could not generate growth curve")
     
-    # GVHD Remission Probability plot
-    st.header("GVHD Remission Probability")
-    gvhd_fig = plot_gvhd_probability(grade_data, desired_dose)
-    if gvhd_fig:
-        st.pyplot(gvhd_fig)
-    else:
-        st.warning("Could not generate GVHD remission probability plot")
-    
-    # Protocol notes with literature-based details
-    st.header("Protocol Notes (Based on Reference Data)")
+    # Protocol details
     st.markdown(f"""
-    **For GVHD {gvhd_grade}:**
-    - Recommended dose: {grade_data['min_dose']}-{grade_data['max_dose']} ×10⁶/kg
-    - Expected remission response: {grade_data['response'][0]}–{grade_data['response'][1]}%
+    **Clinical Protocol for {grade} GVHD:**
+    - Recommended dose: {grade_info['min_dose']}-{grade_info['max_dose']}×10⁶/kg
+    - Expected response: {grade_info['response'][0]}-{grade_info['response'][1]}%
     
-    **Cell Culture Parameters:**
-    - Flask type: {flask_type}
-      - Surface area: {flask_data['surface']} cm²
-      - Initial cells: {flask_data['initial_cells']/1e6:.2f}×10⁶ cells/flask
-      - Max cells at confluency: {flask_data['max_cells']/1e6:.1f}×10⁶ cells/flask
-      - Media volume: {flask_data['media']} mL/flask
-    
-    **Passage Schedule:**
-    - Passage 1: {MIN_PASSAGE1_DAYS} days (media changes on days 1,4,7,11)  
-    - Subsequent passages: {ADDITIONAL_PASSAGE_DAYS} days each (2 media changes per passage)
-    - Passages needed: {results['passages_used']}
-    
-    **Calculations:**
-    - PBSC volume: Limited to maximum 50mL collection
-    - Initial flasks: {results['initial_flasks']} (seeding {flask_data['initial_cells']/1e6:.2f}×10⁶ cells/flask)
-    - Final yield: {max(results['passage1_yield'], results['passage2_yield'], results['passage3_yield'])/1e6:.1f}×10⁶ cells
-    - Total media: {results['total_media']:.0f} mL ({results['initial_flasks']} flasks × {results['media_per_flask']} mL × {4 + (results['passages_used']-1)*2} changes)
-    - {f"Plasma priming: {results['plasma_volume']} mL (15% of initial media)" if plasma_priming else "No plasma priming"}
-    
-    **Quality Control:**
-    - Viability >90%
-    - MSC markers (CD73+/CD90+/CD105+ >95%, CD45- <2%)
-    - Sterility testing
-    - Differentiation potential
+    **Culture Parameters:**
+    - Flask: {flask_type} ({FLASK_DATA[flask_type]['surface_cm2']} cm²)
+    - Seeding density: {FLASK_DATA[flask_type]['seeding_cells']/1e6:.1f}×10⁶ cells/flask
+    - Max yield: {FLASK_DATA[flask_type]['max_cells']/1e6:.1f}×10⁶ cells/flask
+    - Media per flask: {FLASK_DATA[flask_type]['media_ml']} mL
     """)
 
 if __name__ == "__main__":
