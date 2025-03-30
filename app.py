@@ -117,6 +117,7 @@ def plot_growth_curve(initial, target, days):
     ax.grid(True)
     return fig
 
+
 def main():
     st.set_page_config(page_title="MSC Therapy Calculator", layout="wide")
     st.title("Advanced MSC Therapy Calculator")
