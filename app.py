@@ -126,7 +126,7 @@ def plot_remission_probability(grade, dose):
     data = GVHD_RESPONSE[grade]
     x = np.linspace(0.5, 2.5, 100)
     opt = (data['min_dose'] + data['max_dose'])/2
-    y = data['response'][0] + (data['response'][1] - data['response'][0]) * np.exp(-((x - opt)/0.3)**2
+    y = data['response'][0] + (data['response'][1] - data['response'][0]) * np.exp(-((x - opt)/0.3)**2)
     
     fig, ax = plt.subplots(figsize=(10,6))
     ax.plot(x, y, 'b-', linewidth=2)
