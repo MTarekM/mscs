@@ -27,12 +27,15 @@ PLASMA_PERCENT = 0.15
 MAX_PBSC = 50  # mL
 
 def calculate_therapy(weight, dose, separator, flask_type, plasma_priming, media_freq):
+    # Validate inputs
     weight = max(8.0, min(weight, 120.0))
     dose = max(0.5, min(dose, 2.0))
     
+    # Calculate target cells and PBSC volume
     target_cells = dose * weight * 1e6
     pbsc_ml = min(target_cells / SEPARATOR_YIELD[separator], MAX_PBSC)
     
+    # Initialize passage tracking
     passages = []
     total_days = 0
     total_media = 0
@@ -58,7 +61,7 @@ def calculate_therapy(weight, dose, separator, flask_type, plasma_priming, media
         )
         
         days = PASSAGE1_DAYS if passage_num == 1 else PASSAGE_DAYS
-        media_changes = max(1, (days // media_freq))  # Ensures at least 1 media change
+        media_changes = (days // media_freq) + 1  # +1 for initial media
         
         passages.append({
             'passage_num': passage_num,
@@ -87,11 +90,12 @@ def calculate_therapy(weight, dose, separator, flask_type, plasma_priming, media
 def plot_growth(passages, target_cells):
     fig, ax = plt.subplots(figsize=(10, 6))
     
+    # Build timeline
     days = [0]
-    cells = [passages[0]['input']]
+    cells = [0]
     cumulative_days = 0
     
-    for passage in passages[1:]:  
+    for passage in passages[1:]:  # Skip seeding passage
         days.append(cumulative_days)
         cells.append(passage['input'])
         
@@ -107,13 +111,15 @@ def plot_growth(passages, target_cells):
     ax.set_title('MSC Expansion Timeline', fontsize=14)
     ax.legend()
     ax.grid(True, alpha=0.3)
+    ax.set_xlim(0, cumulative_days * 1.05)
+    ax.set_ylim(0, max(max(cells), target_cells)*1.1/1e6)
     
     return fig
 
 def plot_remission_probability(grade, dose):
     data = GVHD_RESPONSE[grade]
     x = np.linspace(0.5, 2.5, 100)
-    opt = (data['min_dose'] + data['max_dose']) / 2
+    opt = (data['min_dose'] + data['max_dose'])/2
     y = data['response'][0] + (data['response'][1] - data['response'][0]) * np.exp(-((x - opt)/0.3)**2)
     
     fig, ax = plt.subplots(figsize=(10, 6))
@@ -157,11 +163,9 @@ def main():
     
     col1, col2 = st.columns(2)
     with col1:
-        st.header("Cell Expansion")
         st.pyplot(plot_growth(results['passages'], results['target_cells']))
     
     with col2:
-        st.header("GVHD Remission Probability")
         st.pyplot(plot_remission_probability(grade, dose))
 
 if __name__ == "__main__":
