@@ -167,7 +167,108 @@ def calculate_msc_therapy(weight, desired_dose, separator, flask_type, plasma_pr
         'passages_used': passages_used
     }
 
-# [Rest of the code remains the same: plot_growth_curve, plot_gvhd_probability, and main functions]
+def plot_growth_curve(results, flask_data):
+    """
+    Plots a piecewise growth curve showing overall cell yield over time.
+    """
+    try:
+        # Get all required values from results with fallbacks
+        initial_cells = results.get('initial_cells', 0)
+        N0 = results.get('initial_flasks', 1)
+        passage1_yield = results.get('passage1_yield', 0)
+        passage2_yield = results.get('passage2_yield', passage1_yield)
+        passage3_yield = results.get('passage3_yield', passage2_yield)
+        flasks_p2 = results.get('flasks_p2', 0)
+        flasks_p3 = results.get('flasks_p3', 0)
+        target_cells = results.get('target_cells', 0)
+        
+        # Calculate starting yields for each passage
+        start1 = N0 * initial_cells if initial_cells > 0 else 1
+        end1 = passage1_yield if passage1_yield > 0 else start1
+        
+        start2 = flasks_p2 * initial_cells if initial_cells > 0 else end1
+        end2 = passage2_yield if passage2_yield > 0 else start2
+        
+        start3 = flasks_p3 * initial_cells if initial_cells > 0 else end2
+        end3 = passage3_yield if passage3_yield > 0 else start3
+        
+        # Define time segments
+        t1 = np.linspace(0, MIN_PASSAGE1_DAYS, 100)
+        t2 = np.linspace(MIN_PASSAGE1_DAYS, MIN_PASSAGE1_DAYS + ADDITIONAL_PASSAGE_DAYS, 100)
+        t3 = np.linspace(MIN_PASSAGE1_DAYS + ADDITIONAL_PASSAGE_DAYS, 
+                        MIN_PASSAGE1_DAYS + 2 * ADDITIONAL_PASSAGE_DAYS, 100)
+        
+        # Exponential growth in each segment
+        factor1 = end1 / start1 if start1 > 0 else 1
+        rate1 = np.log(factor1) / (MIN_PASSAGE1_DAYS) if MIN_PASSAGE1_DAYS > 0 else 0
+        growth1 = start1 * np.exp(rate1 * t1)
+        
+        factor2 = end2 / start2 if start2 > 0 else 1
+        rate2 = np.log(factor2) / (ADDITIONAL_PASSAGE_DAYS) if ADDITIONAL_PASSAGE_DAYS > 0 else 0
+        growth2 = start2 * np.exp(rate2 * (t2 - MIN_PASSAGE1_DAYS))
+        
+        factor3 = end3 / start3 if start3 > 0 else 1
+        rate3 = np.log(factor3) / (ADDITIONAL_PASSAGE_DAYS) if ADDITIONAL_PASSAGE_DAYS > 0 else 0
+        growth3 = start3 * np.exp(rate3 * (t3 - (MIN_PASSAGE1_DAYS + ADDITIONAL_PASSAGE_DAYS)))
+        
+        # Combine segments
+        t_total = np.concatenate([t1, t2, t3])
+        growth_total = np.concatenate([growth1, growth2, growth3])
+        
+        fig, ax = plt.subplots(figsize=(10, 6))
+        ax.plot(t_total, growth_total, 'g-', linewidth=2, label='MSC Growth Curve')
+        ax.axhline(target_cells, color='r', linestyle='--', label=f'Target Dose ({target_cells/1e6:.1f}×10⁶ cells)')
+        ax.axhline(end3, color='b', linestyle=':', label=f'Projected Yield ({end3/1e6:.1f}×10⁶ cells)')
+        
+        ax.set_xlabel('Culture Time (days)', fontsize=12)
+        ax.set_ylabel('Total Cells', fontsize=12)
+        ax.set_title('MSC Expansion Projection', fontsize=14)
+        ax.legend(fontsize=10)
+        ax.grid(True, linestyle='--', alpha=0.7)
+        plt.tight_layout()
+        
+        return fig
+    except Exception as e:
+        st.error(f"Error generating growth curve: {str(e)}")
+        return None
+def plot_gvhd_probability(grade_data, dose):
+    """
+    Plots a predicted GVHD remission probability curve.
+    """
+    try:
+        if not grade_data or 'min_dose' not in grade_data:
+            raise ValueError("Invalid grade data")
+        
+        min_dose = grade_data.get('min_dose', 0.5)
+        max_dose = grade_data.get('max_dose', 2.0)
+        response = grade_data.get('response', [50, 70])
+        
+        opt_dose = (min_dose + max_dose) / 2
+        lower_prob, upper_prob = response[0], response[1]
+        sigma = (max_dose - min_dose) / 3  # More gradual curve
+        
+        x = np.linspace(0.5, 2.5, 200)
+        # Sigmoid-like function for more realistic probability curve
+        y = lower_prob + (upper_prob - lower_prob) / (1 + np.exp(-(x - opt_dose)/sigma*2))
+        
+        fig, ax = plt.subplots(figsize=(10, 6))
+        ax.plot(x, y, 'b-', linewidth=2, 
+               label=f"GVHD Remission Probability ({lower_prob}-{upper_prob}%)")
+        ax.axvline(dose, color='r', linestyle='--', 
+                  label=f"Selected Dose: {dose:.2f}×10⁶/kg")
+        
+        ax.set_xlabel("MSC Dose (×10⁶ cells/kg)", fontsize=12)
+        ax.set_ylabel("Probability of Response (%)", fontsize=12)
+        ax.set_title("Dose-Response Relationship", fontsize=14)
+        ax.set_ylim(0, 100)
+        ax.legend(fontsize=10, loc='lower right')
+        ax.grid(True, linestyle='--', alpha=0.7)
+        plt.tight_layout()
+        
+        return fig
+    except Exception as e:
+        st.error(f"Error generating GVHD plot: {str(e)}")
+        return None
 
 def main():
     st.set_page_config(page_title="MSC Therapy Calculator", layout="wide")
