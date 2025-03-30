@@ -4,63 +4,26 @@ import numpy as np
 
 # Constants
 SEEDING_DENSITY = 5000  # cells/cm²
-HARVEST_CONFLUENCY = 80  # %
 GROWTH_RATE = 0.5  # doublings per day
 MIN_CULTURE_DAYS = 3  # Minimum days per passage
 
-FLASK_TYPES = {
-    'T25': {'surface': 25, 'media_min': 5, 'media_max': 10},
-    'T75': {'surface': 75, 'media_min': 15, 'media_max': 20},
-    'T175': {'surface': 175, 'media_min': 30, 'media_max': 40}
-}
-
-GVHD_RESPONSE = {
-    'Grade I': {'min_dose': 0.5, 'max_dose': 1.0, 'response': [60, 80]},
-    'Grade II': {'min_dose': 1.0, 'max_dose': 1.5, 'response': [50, 70]},
-    'Grade III-IV': {'min_dose': 1.5, 'max_dose': 2.0, 'response': [40, 60]}
-}
-
-def calculate_msc_therapy(weight, desired_dose, flask_type, media_volume, media_freq):
-    # Calculate total MSCs needed (×10⁶ cells)
-    total_cells = desired_dose * weight
-    
-    # Calculate required PBSC volume (minimum 50mL, scales with dose)
-    pbsc_volume = max(0.05, 0.05 * (desired_dose / 1.0))
-    
-    # Calculate flasks needed
-    flask_area = FLASK_TYPES[flask_type]['surface']
-    initial_cells = flask_area * SEEDING_DENSITY / 1e6  # ×10⁶ cells
-    
-    # Calculate passages needed
-    passages = max(0, int(np.ceil(np.log(total_cells/initial_cells) / np.log(5))))
-    
-    # Calculate culture days (minimum 3 days per passage)
-    culture_days = max(MIN_CULTURE_DAYS, int(np.ceil(MIN_CULTURE_DAYS * (passages + 1))))
-    
-    # Calculate total media needed
-    total_media = media_volume * (culture_days // media_freq) * (passages + 1)
-    
-    return {
-        'pbsc_volume': pbsc_volume,
-        'flasks': passages + 1,
-        'passages': passages,
-        'culture_days': culture_days,
-        'total_media': total_media,
-        'initial_cells': initial_cells,
-        'target_cells': total_cells
-    }
-
 def plot_growth_curve(initial_cells, target_cells, days):
-    x = np.linspace(0, max(days, 1), 100)  # Ensure at least 1 day
+    # Ensure we have valid time points
+    days = max(1, days)  # Minimum 1 day
+    x = np.linspace(0, days, 100)
     
-    # Calculate growth curve
+    # Calculate exponential growth
     growth = initial_cells * np.exp(GROWTH_RATE * x)
     
-    # Apply plateau when reaching target
-    reached_target = growth >= target_cells
-    if np.any(reached_target):
-        plateau_idx = np.argmax(reached_target)
-        growth[plateau_idx:] = target_cells
+    # Find when we reach the target (if we do)
+    reached_target = np.where(growth >= target_cells)[0]
+    
+    # Apply plateau if target is reached
+    if len(reached_target) > 0:
+        plateau_idx = reached_target[0]
+        # Ensure we don't exceed array bounds
+        if plateau_idx < len(growth):
+            growth[plateau_idx:] = target_cells
     
     fig, ax = plt.subplots()
     ax.plot(x, growth, 'g-', linewidth=2)
