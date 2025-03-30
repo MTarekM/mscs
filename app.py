@@ -4,9 +4,9 @@ import numpy as np
 
 # Constants
 SEEDING_DENSITY = 5000  # cells/cm²
-MAX_CONFLUENCY = 80  # %
 HARVEST_CONFLUENCY = 80  # %
 GROWTH_RATE = 0.5  # doublings per day
+MIN_CULTURE_DAYS = 3  # Minimum days per passage
 
 FLASK_TYPES = {
     'T25': {'surface': 25, 'media_min': 5, 'media_max': 10},
@@ -32,19 +32,13 @@ def calculate_msc_therapy(weight, desired_dose, flask_type, media_volume, media_
     initial_cells = flask_area * SEEDING_DENSITY / 1e6  # ×10⁶ cells
     
     # Calculate passages needed
-    passages = 0
-    remaining_cells = total_cells
-    while remaining_cells > initial_cells:
-        passages += 1
-        remaining_cells /= 5  # 5-fold expansion per passage
+    passages = max(0, int(np.ceil(np.log(total_cells/initial_cells) / np.log(5))))
     
-    # Calculate culture days (minimum 3 days)
-    days_per_passage = max(3, np.log(HARVEST_CONFLUENCY/SEEDING_DENSITY) / np.log(2) / GROWTH_RATE)
-    culture_days = int(np.ceil(days_per_passage * (passages + 1)))
+    # Calculate culture days (minimum 3 days per passage)
+    culture_days = max(MIN_CULTURE_DAYS, int(np.ceil(MIN_CULTURE_DAYS * (passages + 1))))
     
     # Calculate total media needed
-    media_per_change = media_volume
-    total_media = media_per_change * (culture_days // media_freq) * (passages + 1)
+    total_media = media_volume * (culture_days // media_freq) * (passages + 1)
     
     return {
         'pbsc_volume': pbsc_volume,
@@ -57,18 +51,15 @@ def calculate_msc_therapy(weight, desired_dose, flask_type, media_volume, media_
     }
 
 def plot_growth_curve(initial_cells, target_cells, days):
-    x = np.linspace(0, days, 100)
-    
-    # Ensure we have enough time points
-    if days <= 0:
-        days = 1  # Minimum 1 day
+    x = np.linspace(0, max(days, 1), 100)  # Ensure at least 1 day
     
     # Calculate growth curve
     growth = initial_cells * np.exp(GROWTH_RATE * x)
     
     # Apply plateau when reaching target
-    plateau_idx = np.argmax(growth >= target_cells)
-    if plateau_idx > 0:  # If we reach target
+    reached_target = growth >= target_cells
+    if np.any(reached_target):
+        plateau_idx = np.argmax(reached_target)
         growth[plateau_idx:] = target_cells
     
     fig, ax = plt.subplots()
