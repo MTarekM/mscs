@@ -37,37 +37,38 @@ def calculate_therapy(weight, dose, separator, flask_type, plasma_priming):
     total_days = 0
     total_media = 0
     
-    for passage_num in range(MAX_PASSAGES + 1):
-        if passage_num == 0:
-            # Initial seeding
-            passages.append({
-                'flasks': current_flasks,
-                'days': 0,
-                'media_changes': 0
-            })
-        else:
-            if passages[-1]['output'] >= target:
-                break
+    # Initial seeding (Passage 0)
+    passages.append({
+        'flasks': current_flasks,
+        'days': 0,
+        'media_changes': 0,
+        'output': current_flasks * FLASK_TYPES[flask_type]['confluent']
+    })
+    
+    # Subsequent passages
+    for passage_num in range(1, MAX_PASSAGES + 1):
+        if passages[-1]['output'] >= target:
+            break
             
-            # Calculate required flasks
-            current_flasks = math.ceil((passages[-1]['output'] / 
-                                      FLASK_TYPES[flask_type]['seeding']) * 
-                                      SAFETY_FACTOR)
-            
-            # Calculate passage duration and media changes
-            days = PASSAGE1_DAYS if passage_num == 1 else PASSAGE_DAYS
-            media_changes = (days // MEDIA_CHANGE_INTERVAL) + 1  # Include initial media
-            
-            # Track cumulative totals
-            total_days += days
-            total_media += current_flasks * FLASK_TYPES[flask_type]['media'] * media_changes
-            
-            passages.append({
-                'flasks': current_flasks,
-                'days': days,
-                'media_changes': media_changes,
-                'output': current_flasks * FLASK_TYPES[flask_type]['confluent']
-            })
+        # Calculate required flasks
+        current_flasks = math.ceil((passages[-1]['output'] / 
+                                  FLASK_TYPES[flask_type]['seeding']) * 
+                                  SAFETY_FACTOR)
+        
+        # Calculate passage duration and media changes
+        days = PASSAGE1_DAYS if passage_num == 1 else PASSAGE_DAYS
+        media_changes = (days // MEDIA_CHANGE_INTERVAL) + 1
+        
+        # Track cumulative totals
+        total_days += days
+        total_media += current_flasks * FLASK_TYPES[flask_type]['media'] * media_changes
+        
+        passages.append({
+            'flasks': current_flasks,
+            'days': days,
+            'media_changes': media_changes,
+            'output': current_flasks * FLASK_TYPES[flask_type]['confluent']
+        })
     
     # Plasma calculation
     plasma_vol = passages[0]['flasks'] * FLASK_TYPES[flask_type]['media'] * PLASMA_PERCENT if plasma_priming else 0
@@ -79,7 +80,7 @@ def calculate_therapy(weight, dose, separator, flask_type, plasma_priming):
         'plasma_vol': plasma_vol,
         'passages': passages,
         'target': target,
-        'final_yield': passages[-1]['output'] if passages else 0
+        'final_yield': passages[-1]['output']
     }
 
 def plot_growth(results):
