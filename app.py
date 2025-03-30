@@ -27,15 +27,12 @@ PLASMA_PERCENT = 0.15
 MAX_PBSC = 50  # mL
 
 def calculate_therapy(weight, dose, separator, flask_type, plasma_priming, media_freq):
-    # Validate inputs
     weight = max(8.0, min(weight, 120.0))
     dose = max(0.5, min(dose, 2.0))
     
-    # Calculate target cells and PBSC volume
     target_cells = dose * weight * 1e6
     pbsc_ml = min(target_cells / SEPARATOR_YIELD[separator], MAX_PBSC)
     
-    # Initialize passage tracking
     passages = []
     total_days = 0
     total_media = 0
@@ -61,7 +58,7 @@ def calculate_therapy(weight, dose, separator, flask_type, plasma_priming, media
         )
         
         days = PASSAGE1_DAYS if passage_num == 1 else PASSAGE_DAYS
-        media_changes = (days // media_freq) + 1  # +1 for initial media
+        media_changes = max(1, (days // media_freq))  # Ensures at least 1 media change
         
         passages.append({
             'passage_num': passage_num,
@@ -86,6 +83,49 @@ def calculate_therapy(weight, dose, separator, flask_type, plasma_priming, media
         'target_cells': target_cells,
         'final_yield': passages[-1]['output']
     }
+
+def plot_growth(passages, target_cells):
+    fig, ax = plt.subplots(figsize=(10, 6))
+    
+    days = [0]
+    cells = [passages[0]['input']]
+    cumulative_days = 0
+    
+    for passage in passages[1:]:  
+        days.append(cumulative_days)
+        cells.append(passage['input'])
+        
+        cumulative_days += passage['days']
+        days.append(cumulative_days)
+        cells.append(passage['output'])
+    
+    ax.plot(days, [x/1e6 for x in cells], 'go-', markersize=8, linewidth=2)
+    ax.axhline(target_cells/1e6, color='r', linestyle='--', label=f'Target: {target_cells/1e6:.1f}×10⁶')
+    
+    ax.set_xlabel('Culture Days', fontsize=12)
+    ax.set_ylabel('Cells (×10⁶)', fontsize=12)
+    ax.set_title('MSC Expansion Timeline', fontsize=14)
+    ax.legend()
+    ax.grid(True, alpha=0.3)
+    
+    return fig
+
+def plot_remission_probability(grade, dose):
+    data = GVHD_RESPONSE[grade]
+    x = np.linspace(0.5, 2.5, 100)
+    opt = (data['min_dose'] + data['max_dose']) / 2
+    y = data['response'][0] + (data['response'][1] - data['response'][0]) * np.exp(-((x - opt)/0.3)**2)
+    
+    fig, ax = plt.subplots(figsize=(10, 6))
+    ax.plot(x, y, 'b-', linewidth=2, label='Remission Probability')
+    ax.axvline(dose, color='r', linestyle='--', label=f'Selected Dose: {dose}×10⁶/kg')
+    ax.set_ylim(0, 100)
+    ax.set_xlabel('Dose (×10⁶ cells/kg)', fontsize=12)
+    ax.set_ylabel('Probability (%)', fontsize=12)
+    ax.legend()
+    ax.grid(True, alpha=0.3)
+    
+    return fig
 
 def main():
     st.set_page_config(page_title="MSC Therapy Calculator", layout="wide")
@@ -115,9 +155,14 @@ def main():
     if plasma_priming:
         st.info(f"**Plasma Volume Needed:** {results['plasma_vol']:.1f} mL")
     
-    st.header("GVHD Remission Probability")
-    grade_data = GVHD_RESPONSE[grade]
-    st.markdown(f"**For {grade} GVHD:** Recommended dose: {grade_data['min_dose']}-{grade_data['max_dose']}×10⁶/kg, Expected response: {grade_data['response'][0]}–{grade_data['response'][1]}%")
+    col1, col2 = st.columns(2)
+    with col1:
+        st.header("Cell Expansion")
+        st.pyplot(plot_growth(results['passages'], results['target_cells']))
     
+    with col2:
+        st.header("GVHD Remission Probability")
+        st.pyplot(plot_remission_probability(grade, dose))
+
 if __name__ == "__main__":
     main()
