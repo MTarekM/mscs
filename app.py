@@ -21,6 +21,7 @@ SEPARATOR_YIELD = {'Haemonetics': 1e6, 'Spectra Optia': 2e6}
 # Protocol constants
 SAFETY_FACTOR = 1.2
 MAX_PASSAGES = 3
+PASSAGE0_DAYS = 2  # Initial seeding takes time too
 PASSAGE1_DAYS = 14
 PASSAGE_DAYS = 7
 PLASMA_PERCENT = 0.15
@@ -42,14 +43,22 @@ def calculate_therapy(weight, dose, separator, flask_type, plasma_priming, media
     
     # Initial seeding (Passage 0)
     initial_flasks = math.ceil(target_cells / FLASK_TYPES[flask_type]['confluent'])
+    
+    # Initial passage also takes time and needs media
+    p0_days = PASSAGE0_DAYS
+    p0_media_changes = 1  # Initial media only for seeding
+    
     passages.append({
         'passage_num': 0,
         'flasks': initial_flasks,
-        'input': initial_flasks * FLASK_TYPES[flask_type]['seeding'],
-        'output': initial_flasks * FLASK_TYPES[flask_type]['confluent'],
-        'days': 0,
-        'media_changes': 0
+        'input': pbsc_ml * SEPARATOR_YIELD[separator],  # Starting cell count from PBSC
+        'output': initial_flasks * FLASK_TYPES[flask_type]['seeding'],
+        'days': p0_days,
+        'media_changes': p0_media_changes
     })
+    
+    total_days += p0_days
+    total_media += initial_flasks * FLASK_TYPES[flask_type]['media'] * p0_media_changes
     
     # Subsequent passages
     for passage_num in range(1, MAX_PASSAGES + 1):
@@ -61,7 +70,9 @@ def calculate_therapy(weight, dose, separator, flask_type, plasma_priming, media
         )
         
         days = PASSAGE1_DAYS if passage_num == 1 else PASSAGE_DAYS
-        media_changes = (days // media_freq) + 1  # +1 for initial media
+        media_changes = (days // media_freq)  # Changes during culture period
+        if media_changes == 0:  # Ensure at least one media change
+            media_changes = 1
         
         passages.append({
             'passage_num': passage_num,
@@ -90,21 +101,26 @@ def calculate_therapy(weight, dose, separator, flask_type, plasma_priming, media
 def plot_growth(passages, target_cells):
     fig, ax = plt.subplots(figsize=(10, 6))
     
-    # Build timeline
+    # Build complete timeline including initial seeding
     days = [0]
-    cells = [0]
+    cells = [passages[0]['input']]  # Start with initial PBSC cells
     cumulative_days = 0
     
-    for passage in passages[1:]:  # Skip seeding passage
-        days.append(cumulative_days)
-        cells.append(passage['input'])
-        
+    # Add all passages to timeline
+    for passage in passages:
         cumulative_days += passage['days']
         days.append(cumulative_days)
         cells.append(passage['output'])
     
     ax.plot(days, [x/1e6 for x in cells], 'go-', markersize=8, linewidth=2)
     ax.axhline(target_cells/1e6, color='r', linestyle='--', label=f'Target: {target_cells/1e6:.1f}×10⁶')
+    
+    # Add annotations for passages
+    for i, passage in enumerate(passages):
+        day_point = sum(p['days'] for p in passages[:i+1])
+        ax.annotate(f"P{passage['passage_num']}", 
+                   (day_point, passage['output']/1e6),
+                   xytext=(5, 5), textcoords='offset points')
     
     ax.set_xlabel('Culture Days', fontsize=12)
     ax.set_ylabel('Cells (×10⁶)', fontsize=12)
@@ -125,9 +141,16 @@ def plot_remission_probability(grade, dose):
     fig, ax = plt.subplots(figsize=(10, 6))
     ax.plot(x, y, 'b-', linewidth=2, label='Remission Probability')
     ax.axvline(dose, color='r', linestyle='--', label=f'Selected Dose: {dose}×10⁶/kg')
+    
+    # Calculate actual probability at selected dose
+    selected_prob = data['response'][0] + (data['response'][1] - data['response'][0]) * np.exp(-((dose - opt)/0.3)**2)
+    ax.plot(dose, selected_prob, 'ro', markersize=8)
+    ax.annotate(f"{selected_prob:.1f}%", (dose, selected_prob), xytext=(5, 5), textcoords='offset points')
+    
     ax.set_ylim(0, 100)
     ax.set_xlabel('Dose (×10⁶ cells/kg)', fontsize=12)
     ax.set_ylabel('Probability (%)', fontsize=12)
+    ax.set_title(f'GVHD {grade} Remission Probability', fontsize=14)
     ax.legend()
     ax.grid(True, alpha=0.3)
     
@@ -161,12 +184,35 @@ def main():
     if plasma_priming:
         st.info(f"**Plasma Volume Needed:** {results['plasma_vol']:.1f} mL")
     
+    # Display passages details
+    st.subheader("Passage Details")
+    passage_data = []
+    for p in results['passages']:
+        passage_data.append({
+            "Passage": p['passage_num'],
+            "Flasks": p['flasks'],
+            "Input Cells": f"{p['input']/1e6:.1f}×10⁶",
+            "Output Cells": f"{p['output']/1e6:.1f}×10⁶",
+            "Days": p['days'],
+            "Media Changes": p['media_changes'],
+            "Media Volume": f"{p['flasks'] * FLASK_TYPES[flask_type]['media'] * p['media_changes']} mL"
+        })
+    st.table(passage_data)
+    
     col1, col2 = st.columns(2)
     with col1:
         st.pyplot(plot_growth(results['passages'], results['target_cells']))
     
     with col2:
         st.pyplot(plot_remission_probability(grade, dose))
+    
+    st.subheader("Summary")
+    st.markdown(f"""
+    - **Target dose**: {dose}×10⁶ cells/kg for a {weight} kg patient ({results['target_cells']/1e6:.1f}×10⁶ total cells)
+    - **Final yield**: {results['final_yield']/1e6:.1f}×10⁶ cells ({(results['final_yield']/results['target_cells'])*100:.1f}% of target)
+    - **Total culture time**: {results['total_days']} days
+    - **Total media required**: {results['total_media']} mL
+    """)
 
 if __name__ == "__main__":
     main()
