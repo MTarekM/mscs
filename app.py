@@ -3,10 +3,10 @@ import matplotlib.pyplot as plt
 import numpy as np
 import math
 
-# EXACT VALUES FROM REFERENCE TABLE
+# Exact values from reference table (converted mm² to cm²)
 FLASK_TYPES = {
     'T-25': {
-        'surface': 25,       # cm²
+        'surface': 25,
         'seeding': 0.7e6,    # cells
         'confluent': 2.8e6,  # cells
         'media': 5           # mL
@@ -39,137 +39,177 @@ SEPARATOR_YIELD = {
 # Constants
 SAFETY_FACTOR = 1.2
 MAX_PASSAGES = 3
-PASSAGE1_DAYS = 14
-PASSAGE_DAYS = 7
-MAX_PBSC = 50  # mL
-PLASMA_PERCENT = 0.15
+PASSAGE1_DURATION = 14  # days
+SUBSEQUENT_PASSAGE_DURATION = 7  # days
+MEDIA_CHANGE_FREQ = 2   # days
+MAX_PBSC = 50           # mL
+PLASMA_PERCENT = 0.15   # 15% of initial media
 
 def calculate_therapy(weight, dose, separator, flask_type, plasma_priming):
-    target = dose * weight * 1e6
-    pbsc = min(target / SEPARATOR_YIELD[separator], MAX_PBSC)
+    target_cells = dose * weight * 1e6
+    pbsc_ml = min(target_cells / SEPARATOR_YIELD[separator], MAX_PBSC)
     
-    # Flask calculations
-    flasks = []
-    n_flasks = math.ceil(target / FLASK_TYPES[flask_type]['confluent'])
+    # Calculate required passages
+    passage_data = []
+    current_flasks = math.ceil(target_cells / FLASK_TYPES[flask_type]['confluent'])
     
     for passage in range(MAX_PASSAGES + 1):
         if passage == 0:
-            flasks.append({
-                'passage': 0,
-                'count': n_flasks,
-                'yield': n_flasks * FLASK_TYPES[flask_type]['confluent'],
-                'days': 0
+            # Initial seeding
+            passage_data.append({
+                'passage_num': 0,
+                'flasks': current_flasks,
+                'input': current_flasks * FLASK_TYPES[flask_type]['seeding'],
+                'output': current_flasks * FLASK_TYPES[flask_type]['confluent'],
+                'duration': 0,
+                'media_changes': 0
             })
         else:
-            prev_yield = flasks[-1]['yield']
-            if prev_yield >= target:
+            # Subsequent passages
+            prev_output = passage_data[-1]['output']
+            if prev_output >= target_cells:
                 break
                 
-            n_flasks = math.ceil((prev_yield / FLASK_TYPES[flask_type]['seeding']) * SAFETY_FACTOR)
-            flasks.append({
-                'passage': passage,
-                'count': n_flasks,
-                'yield': n_flasks * FLASK_TYPES[flask_type]['confluent'],
-                'days': PASSAGE1_DAYS if passage == 1 else PASSAGE_DAYS
+            current_flasks = math.ceil((prev_output / FLASK_TYPES[flask_type]['seeding']) * SAFETY_FACTOR)
+            duration = PASSAGE1_DURATION if passage == 1 else SUBSEQUENT_PASSAGE_DURATION
+            media_changes = duration // MEDIA_CHANGE_FREQ
+            
+            passage_data.append({
+                'passage_num': passage,
+                'flasks': current_flasks,
+                'input': current_flasks * FLASK_TYPES[flask_type]['seeding'],
+                'output': current_flasks * FLASK_TYPES[flask_type]['confluent'],
+                'duration': duration,
+                'media_changes': media_changes
             })
     
-    total_days = sum(f['days'] for f in flasks[1:])
-    media_changes = 4 + (len(flasks)-2)*2
-    total_media = flasks[0]['count'] * FLASK_TYPES[flask_type]['media'] * media_changes
-    plasma = flasks[0]['count'] * FLASK_TYPES[flask_type]['media'] * PLASMA_PERCENT if plasma_priming else 0
+    # Calculate totals
+    total_days = sum(p['duration'] for p in passage_data[1:])
+    total_media = sum(p['flasks'] * FLASK_TYPES[flask_type]['media'] * p['media_changes'] 
+                   for p in passage_data[1:])
+    plasma_vol = passage_data[0]['flasks'] * FLASK_TYPES[flask_type]['media'] * PLASMA_PERCENT if plasma_priming else 0
     
     return {
-        'pbsc': pbsc,
-        'flasks': flasks,
+        'pbsc_ml': pbsc_ml,
+        'passage_data': passage_data,
         'total_days': total_days,
         'total_media': total_media,
-        'plasma': plasma,
-        'target': target,
-        'final_yield': flasks[-1]['yield']
+        'plasma_vol': plasma_vol,
+        'target_cells': target_cells,
+        'final_yield': passage_data[-1]['output']
     }
 
-def plot_growth(results, flask_type):
+def plot_growth(results):
     fig, ax = plt.subplots(figsize=(10, 6))
+    
+    # Calculate timeline points
     days = [0]
     cells = [0]
+    cumulative_days = 0
     
-    for i, f in enumerate(results['flasks'][1:]):
-        days.append(days[-1] + f['days'])
-        cells.append(f['yield'])
+    for passage in results['passage_data'][1:]:
+        cumulative_days += passage['duration']
+        
+        # Plot growth during passage
+        passage_days = np.linspace(days[-1], cumulative_days, 10)
+        growth = np.linspace(passage['input'], passage['output'], 10)
+        
+        ax.plot(passage_days, [x/1e6 for x in growth], 'g-', linewidth=2)
+        
+        days.append(cumulative_days)
+        cells.append(passage['output'])
     
-    ax.plot(days, [x/1e6 for x in cells], 'go-', linewidth=2)
-    ax.axhline(results['target']/1e6, color='r', linestyle='--')
-    ax.set_ylabel('Cells (×10⁶)', fontsize=12)
+    ax.axhline(results['target_cells']/1e6, color='r', linestyle='--', 
+              label=f'Target: {results["target_cells"]/1e6:.1f}×10⁶ cells')
+    
     ax.set_xlabel('Culture Days', fontsize=12)
+    ax.set_ylabel('Total Cells (×10⁶)', fontsize=12)
+    ax.set_title('MSC Expansion Timeline', fontsize=14)
+    ax.legend()
     ax.grid(True, alpha=0.3)
+    
     return fig
 
 def plot_gvhd_probability(grade, dose):
     data = GVHD_RESPONSE[grade]
-    min_d = data['min_dose']
-    max_d = data['max_dose']
-    resp_min, resp_max = data['response']
+    min_dose = data['min_dose']
+    max_dose = data['max_dose']
+    response_range = data['response']
     
     x = np.linspace(0.5, 2.5, 100)
-    opt = (min_d + max_d)/2
-    y = resp_min + (resp_max - resp_min) * np.exp(-((x - opt)/0.3)**2)
+    optimal = (min_dose + max_dose)/2
+    y = response_range[0] + (response_range[1] - response_range[0]) * np.exp(-((x - optimal)/0.3)**2)
     
     fig, ax = plt.subplots(figsize=(10, 6))
-    ax.plot(x, y, 'b-', linewidth=2)
-    ax.axvline(dose, color='r', linestyle='--')
+    ax.plot(x, y, 'b-', linewidth=2, label='Remission Probability')
+    ax.axvline(dose, color='r', linestyle='--', label=f'Selected Dose: {dose}×10⁶/kg')
     ax.set_ylim(0, 100)
     ax.set_xlabel('Dose (×10⁶ cells/kg)', fontsize=12)
-    ax.set_ylabel('Remission Probability (%)', fontsize=12)
+    ax.set_ylabel('Probability (%)', fontsize=12)
+    ax.legend()
     ax.grid(True, alpha=0.3)
+    
     return fig
 
 def main():
     st.set_page_config(page_title="MSC Therapy Calculator", layout="wide")
-    st.title("MSC Therapy Calculator (8kg+)")
+    st.title("MSC Therapy Calculator")
     
     with st.sidebar:
         st.header("Patient Parameters")
-        weight = st.slider("Weight (kg)", 8.0, 120.0, 8.0, 0.1)
+        weight = st.slider("Weight (kg)", 8.0, 120.0, 70.0, 0.1)
         grade = st.selectbox("GVHD Grade", list(GVHD_RESPONSE.keys()))
         dose = st.slider("Dose (×10⁶/kg)", 0.5, 2.0, 1.0, 0.1)
         
         st.header("Lab Parameters")
         separator = st.selectbox("Cell Separator", list(SEPARATOR_YIELD.keys()))
         flask_type = st.selectbox("Flask Type", list(FLASK_TYPES.keys()))
-        plasma = st.checkbox("Plasma Priming")
+        plasma_priming = st.checkbox("Plasma Priming (15% of initial media)", 
+                                   help="Use patient plasma for initial culture media preparation")
     
-    # Calculations
-    results = calculate_therapy(weight, dose, separator, flask_type, plasma)
+    # Perform calculations
+    results = calculate_therapy(weight, dose, separator, flask_type, plasma_priming)
     grade_data = GVHD_RESPONSE[grade]
     
-    # Results display
+    # Display results
+    st.header("Therapy Parameters")
     cols = st.columns(4)
-    cols[0].metric("PBSC Volume", f"{results['pbsc']:.1f} mL")
-    cols[1].metric("Initial Flasks", results['flasks'][0]['count'])
+    cols[0].metric("PBSC Volume", f"{results['pbsc_ml']:.1f} mL")
+    cols[1].metric("Initial Flasks", results['passage_data'][0]['flasks'])
     cols[2].metric("Total Media", f"{results['total_media']:.0f} mL")
-    cols[3].metric("Culture Days", results['total_days'])
+    cols[3].metric("Culture Duration", f"{results['total_days']} days")
+    
+    if plasma_priming:
+        st.info(f"**Plasma Priming Volume:** {results['plasma_vol']:.1f} mL required")
     
     # Plots
     col1, col2 = st.columns(2)
     with col1:
-        st.header("Expansion Progress")
-        st.pyplot(plot_growth(results, flask_type))
+        st.header("Cell Expansion")
+        st.pyplot(plot_growth(results))
     
     with col2:
-        st.header("GVHD Remission Probability")
+        st.header("GVHD Response Probability")
         st.pyplot(plot_gvhd_probability(grade, dose))
     
     # Protocol details
-    st.header("Protocol Summary")
+    st.header("Culture Protocol Details")
     st.markdown(f"""
     **For {grade} GVHD:**
-    - Recommended dose: {grade_data['min_dose']}-{grade_data['max_dose']}×10⁶/kg
-    - Expected response: {grade_data['response'][0]}–{grade_data['response'][1]}%
+    - Recommended dose range: {grade_data['min_dose']}-{grade_data['max_dose']}×10⁶/kg
+    - Expected remission rate: {grade_data['response'][0]}–{grade_data['response'][1]}%
     
     **Culture Parameters:**
-    - Flask: {flask_type} ({FLASK_TYPES[flask_type]['surface']} cm²)
-    - Seeding: {FLASK_TYPES[flask_type]['seeding']/1e6:.1f}×10⁶ cells/flask
+    - Flask type: {flask_type} ({FLASK_TYPES[flask_type]['surface']} cm²)
+    - Seeding density: {FLASK_TYPES[flask_type]['seeding']/1e6:.1f}×10⁶ cells/flask
     - Confluent yield: {FLASK_TYPES[flask_type]['confluent']/1e6:.1f}×10⁶ cells/flask
+    - Media volume: {FLASK_TYPES[flask_type]['media']} mL/flask
+    - Media changes: Every {MEDIA_CHANGE_FREQ} days
+    
+    **Passage Schedule:**
+    - Passage 1: {PASSAGE1_DURATION} days ({PASSAGE1_DURATION//MEDIA_CHANGE_FREQ} media changes)
+    - Subsequent passages: {SUBSEQUENT_PASSAGE_DURATION} days each ({SUBSEQUENT_PASSAGE_DURATION//MEDIA_CHANGE_FREQ} changes)
+    - Total passages: {len(results['passage_data'])-1}
     
     **Final Yield:** {results['final_yield']/1e6:.1f}×10⁶ cells
     """)
